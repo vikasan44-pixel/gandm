@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -19,9 +20,10 @@ type UserListFilter struct {
 }
 
 type UserDetail struct {
-	User         *models.User                `json:"user"`
-	Tools        []models.Tool               `json:"tools"`
-	Verification *models.VerificationRequest `json:"verification,omitempty"`
+	User         *models.User                 `json:"user"`
+	Tools        []models.Tool                `json:"tools"`
+	Verification *models.VerificationRequest  `json:"verification,omitempty"`
+	Rating       repository.UserRatingSummary `json:"rating"`
 }
 
 func (s *AdminService) ListUsers(ctx context.Context, f UserListFilter) ([]models.User, error) {
@@ -68,7 +70,13 @@ func (s *AdminService) GetUser(ctx context.Context, userID uuid.UUID) (*UserDeta
 		verification = nil
 	}
 
-	return &UserDetail{User: user, Tools: tools, Verification: verification}, nil
+	ratingRepo := repository.NewRatingRepository(s.db)
+	rating, err := ratingRepo.SummaryForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UserDetail{User: user, Tools: tools, Verification: verification, Rating: rating}, nil
 }
 
 // SetUserTools replaces a user's whole tool assignment (checkbox-list
@@ -152,6 +160,39 @@ func (s *AdminService) SetUserSubscription(ctx context.Context, adminID, userID 
 		return err
 	}
 
+	return tx.Commit(ctx)
+}
+
+// MarkConsolidatedPayment lets an admin manually record a one-time
+// consolidation payment for a client — the testing stand-in alongside the
+// sandbox provider.
+func (s *AdminService) MarkConsolidatedPayment(ctx context.Context, adminID, consolidatedID, clientID uuid.UUID) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	consRepo := repository.NewConsolidationRepository(tx)
+	if _, err := consRepo.GetConsolidatedByID(ctx, consolidatedID); err != nil {
+		return err
+	}
+
+	if err := consRepo.CreatePayment(ctx, &models.ConsolidatedPayment{
+		ID:                    uuid.New(),
+		ConsolidatedRequestID: consolidatedID,
+		ClientID:              clientID,
+		Provider:              "manual",
+		ProviderRef:           "admin-" + adminID.String(),
+		CreatedAt:             time.Now(),
+	}); err != nil {
+		return err
+	}
+
+	details := map[string]any{"consolidated_request_id": consolidatedID}
+	if err := writeAuditLog(ctx, tx, adminID, "consolidated_payment_marked", &clientID, details); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 

@@ -30,6 +30,7 @@ export function ClientShell() {
   const nav: NavItem[] = [
     { to: "/client/cargo", label: t("nav.myCargo") },
     { to: "/client/chats", label: t("nav.chats") },
+    { to: "/client/rating", label: t("rating.navLabel") },
   ];
   return <Shell brand={t("app.clientTitle")} nav={nav} />;
 }
@@ -45,7 +46,9 @@ export function PartnerShell() {
   const nav: NavItem[] = [
     { to: "/partner/cargo", label: t("nav.availableCargo") },
     { to: "/partner/routes", label: t("nav.routes") },
+    { to: "/partner/fill-reports", label: t("fill.navLabel") },
     { to: "/partner/chats", label: t("nav.chats") },
+    { to: "/partner/rating", label: t("rating.navLabel") },
     { to: "/partner/notifications", label: t("nav.notifications"), badge: unreadCount },
   ];
   return <Shell brand={t("app.partnerTitle")} nav={nav} />;

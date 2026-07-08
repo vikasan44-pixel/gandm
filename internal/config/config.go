@@ -40,6 +40,10 @@ type Config struct {
 	// MatchingServiceURL is the Python consolidation-matching service.
 	// Capacity limits live in platform_settings (DB), not here.
 	MatchingServiceURL string
+
+	// PaymentProvider selects the payment backend ("sandbox" until a real
+	// integration exists).
+	PaymentProvider string
 }
 
 func Load() (*Config, error) {
@@ -98,6 +102,7 @@ func Load() (*Config, error) {
 	cfg.ContactLimitSubscribed = limitSub
 
 	cfg.MatchingServiceURL = getEnv("MATCHING_SERVICE_URL", "http://localhost:8000")
+	cfg.PaymentProvider = getEnv("PAYMENT_PROVIDER", "sandbox")
 
 	accessTTL, err := time.ParseDuration(getEnv("JWT_ACCESS_TTL", "15m"))
 	if err != nil {

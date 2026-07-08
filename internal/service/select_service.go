@@ -23,10 +23,13 @@ type RevealedContact struct {
 }
 
 type SelectOfferResult struct {
-	Contact      RevealedContact `json:"contact"`
-	ChatID       uuid.UUID       `json:"chat_id"`
-	RevealsUsed  int             `json:"reveals_used"`
-	RevealsLimit int             `json:"reveals_limit"`
+	Contact RevealedContact `json:"contact"`
+	// ParticipantID lets the client rate the counterparty after the deal —
+	// identity is already revealed at this point.
+	ParticipantID uuid.UUID `json:"participant_id"`
+	ChatID        uuid.UUID `json:"chat_id"`
+	RevealsUsed   int       `json:"reveals_used"`
+	RevealsLimit  int       `json:"reveals_limit"`
 }
 
 // SelectOffer is the retention checkpoint: the cargo owner picks an offer,
@@ -102,7 +105,7 @@ func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID
 	}
 
 	chatRepo := repository.NewChatRepository(tx)
-	chat := &models.Chat{ID: uuid.New(), CargoRequestID: cargoRequestID, CreatedAt: now}
+	chat := &models.Chat{ID: uuid.New(), CargoRequestID: &cargoRequestID, CreatedAt: now}
 	if err := chatRepo.Create(ctx, chat); err != nil {
 		return nil, err
 	}
@@ -129,8 +132,9 @@ func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID
 			Email:       participant.Email,
 			Phone:       participant.Phone,
 		},
-		ChatID:       chat.ID,
-		RevealsUsed:  used + 1,
-		RevealsLimit: limit,
+		ParticipantID: participant.ID,
+		ChatID:        chat.ID,
+		RevealsUsed:   used + 1,
+		RevealsLimit:  limit,
 	}, nil
 }

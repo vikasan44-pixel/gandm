@@ -7,9 +7,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"gandm/internal/models"
 )
+
+var ErrAlreadyPaid = errors.New("this consolidation is already paid by this client")
 
 type ConsolidationRepository struct {
 	db Querier
@@ -105,7 +108,7 @@ func (r *ConsolidationRepository) ListOpenCargoWithoutActiveSuggestion(ctx conte
 	return queryCargoRequests(ctx, r.db, q)
 }
 
-const consolidatedColumns = `id, origin_lat, origin_lng, origin_label, origin_country, destination_lat, destination_lng, destination_label, destination_country, total_volume_m3, total_weight_kg, member_request_ids, status, created_at`
+const consolidatedColumns = `id, origin_lat, origin_lng, origin_label, origin_country, destination_lat, destination_lng, destination_label, destination_country, total_volume_m3, total_weight_kg, member_request_ids, status, invite_status, initiator_client_id, invited_client_id, chat_id, created_at`
 
 func scanConsolidatedFields(row pgx.Row, c *models.ConsolidatedRequest) error {
 	var memberIDs []byte
@@ -113,7 +116,9 @@ func scanConsolidatedFields(row pgx.Row, c *models.ConsolidatedRequest) error {
 		&c.ID,
 		&c.Origin.Lat, &c.Origin.Lng, &c.Origin.Label, &c.Origin.Country,
 		&c.Destination.Lat, &c.Destination.Lng, &c.Destination.Label, &c.Destination.Country,
-		&c.TotalVolumeM3, &c.TotalWeightKg, &memberIDs, &c.Status, &c.CreatedAt,
+		&c.TotalVolumeM3, &c.TotalWeightKg, &memberIDs, &c.Status,
+		&c.InviteStatus, &c.InitiatorClientID, &c.InvitedClientID, &c.ChatID,
+		&c.CreatedAt,
 	)
 	if err != nil {
 		return err
@@ -209,6 +214,130 @@ func (r *ConsolidationRepository) ListOpenConsolidatedMatchingUserRoutes(ctx con
 		ORDER BY cr.created_at DESC
 	`
 	return r.queryConsolidated(ctx, q, userID, cnKm, kzKm)
+}
+
+// SetInvite records who initiated the pairing and who is invited.
+func (r *ConsolidationRepository) SetInvite(ctx context.Context, id, initiatorID, invitedID uuid.UUID) error {
+	const q = `
+		UPDATE consolidated_requests
+		SET invite_status = 'invited', initiator_client_id = $2, invited_client_id = $3
+		WHERE id = $1
+	`
+	tag, err := r.db.Exec(ctx, q, id, initiatorID, invitedID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetAccepted flips the invite to accepted and attaches the shared chat.
+func (r *ConsolidationRepository) SetAccepted(ctx context.Context, id, chatID uuid.UUID) error {
+	const q = `UPDATE consolidated_requests SET invite_status = 'accepted', chat_id = $2 WHERE id = $1`
+	tag, err := r.db.Exec(ctx, q, id, chatID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *ConsolidationRepository) UpdateConsolidatedStatus(ctx context.Context, id uuid.UUID, status models.CargoRequestStatus) error {
+	tag, err := r.db.Exec(ctx, `UPDATE consolidated_requests SET status = $2 WHERE id = $1`, id, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListMemberClients returns the distinct owners of the member cargo
+// requests — the two clients of the consolidation.
+func (r *ConsolidationRepository) ListMemberClients(ctx context.Context, consolidatedID uuid.UUID) ([]uuid.UUID, error) {
+	const q = `
+		SELECT DISTINCT c.client_id
+		FROM consolidated_requests cr
+		JOIN cargo_requests c ON cr.member_request_ids @> to_jsonb(c.id::text)
+		WHERE cr.id = $1
+	`
+	rows, err := r.db.Query(ctx, q, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make([]uuid.UUID, 0, 2)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (r *ConsolidationRepository) CreatePayment(ctx context.Context, p *models.ConsolidatedPayment) error {
+	const q = `
+		INSERT INTO consolidated_payments (id, consolidated_request_id, client_id, provider, provider_ref, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`
+	_, err := r.db.Exec(ctx, q, p.ID, p.ConsolidatedRequestID, p.ClientID, p.Provider, p.ProviderRef, p.CreatedAt)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrAlreadyPaid
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *ConsolidationRepository) HasPayment(ctx context.Context, consolidatedID, clientID uuid.UUID) (bool, error) {
+	const q = `SELECT EXISTS (SELECT 1 FROM consolidated_payments WHERE consolidated_request_id = $1 AND client_id = $2)`
+	var ok bool
+	err := r.db.QueryRow(ctx, q, consolidatedID, clientID).Scan(&ok)
+	return ok, err
+}
+
+// UpsertSelection stores/overwrites the client's carrier choice — clients
+// may change their mind until the deal closes.
+func (r *ConsolidationRepository) UpsertSelection(ctx context.Context, s *models.ConsolidatedSelection) error {
+	const q = `
+		INSERT INTO consolidated_selections (consolidated_request_id, client_id, offer_id, created_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (consolidated_request_id, client_id) DO UPDATE SET offer_id = EXCLUDED.offer_id, created_at = EXCLUDED.created_at
+	`
+	_, err := r.db.Exec(ctx, q, s.ConsolidatedRequestID, s.ClientID, s.OfferID, s.CreatedAt)
+	return err
+}
+
+func (r *ConsolidationRepository) ListSelections(ctx context.Context, consolidatedID uuid.UUID) ([]models.ConsolidatedSelection, error) {
+	const q = `
+		SELECT consolidated_request_id, client_id, offer_id, created_at
+		FROM consolidated_selections WHERE consolidated_request_id = $1
+	`
+	rows, err := r.db.Query(ctx, q, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]models.ConsolidatedSelection, 0, 2)
+	for rows.Next() {
+		var s models.ConsolidatedSelection
+		if err := rows.Scan(&s.ConsolidatedRequestID, &s.ClientID, &s.OfferID, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, s)
+	}
+	return items, rows.Err()
 }
 
 func (r *ConsolidationRepository) queryConsolidated(ctx context.Context, q string, args ...any) ([]models.ConsolidatedRequest, error) {

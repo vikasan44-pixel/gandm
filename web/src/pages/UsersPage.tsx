@@ -8,6 +8,7 @@ import {
   getPermissionSets,
   getTools,
   getUserDetail,
+  getUserFillReports,
   getUserRoutes,
   getUsers,
   setUserSubscription,
@@ -137,6 +138,7 @@ function UserDetailPanel({
   const allTools = useAsync(getTools, []);
   const allSets = useAsync(getPermissionSets, []);
   const routes = useAsync(() => getUserRoutes(userId), [userId]);
+  const fillReports = useAsync(() => getUserFillReports(userId), [userId]);
 
   const [selectedToolIds, setSelectedToolIds] = useState<string[]>([]);
   const [selectedSetId, setSelectedSetId] = useState("");
@@ -290,6 +292,14 @@ function UserDetailPanel({
           <dt>{t("users.subscription")}</dt>
           <dd>{user.has_subscription ? t("users.subYes") : t("users.subNo")}</dd>
         </div>
+        <div>
+          <dt>{t("rating.title")}</dt>
+          <dd>
+            {detail.data.rating.average !== null
+              ? `★ ${detail.data.rating.average} (${detail.data.rating.count} ${t("rating.ratingsCount")})`
+              : t("rating.noRatings")}
+          </dd>
+        </div>
         {verification?.reject_reason && (
           <div>
             <dt>{t("verification.rejectReason")}</dt>
@@ -383,6 +393,32 @@ function UserDetailPanel({
           {t("users.addRoute")}
         </button>
       </div>
+
+      {fillReports.data && fillReports.data.length > 0 && (
+        <>
+          <h3 className="detail-panel__subtitle">{t("fill.historyTitle")}</h3>
+          <ul className="tool-group__list">
+            {fillReports.data.map((report) => (
+              <li key={report.id} className="tool-row">
+                <div className="tool-row__name">
+                  {formatDate(report.report_date)}: {report.expected_fill_percent}% /{" "}
+                  {report.actual_fill_percent}%
+                </div>
+                {report.photo_view_url && (
+                  <a
+                    className="panel__link"
+                    href={report.photo_view_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {t("fill.photoLink")}
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <h3 className="detail-panel__subtitle">{t("users.assignedTools")}</h3>
       {allTools.isLoading && <LoadingState />}

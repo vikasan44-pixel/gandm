@@ -19,6 +19,8 @@ import { PartnerCargoPage } from "./pages/partner/PartnerCargoPage";
 import { RoutesPage } from "./pages/partner/RoutesPage";
 import { NotificationsPage } from "./pages/partner/NotificationsPage";
 import { ChatsPage } from "./pages/chat/ChatsPage";
+import { RatingPage } from "./pages/RatingPage";
+import { FillReportsPage } from "./pages/partner/FillReportsPage";
 
 export default function App() {
   return (
@@ -42,6 +44,7 @@ export default function App() {
             <Route element={<ClientShell />}>
               <Route path="/client/cargo" element={<ClientCargoPage />} />
               <Route path="/client/chats" element={<ChatsPage />} />
+              <Route path="/client/rating" element={<RatingPage />} />
             </Route>
           </Route>
 
@@ -51,6 +54,8 @@ export default function App() {
               <Route path="/partner/routes" element={<RoutesPage />} />
               <Route path="/partner/notifications" element={<NotificationsPage />} />
               <Route path="/partner/chats" element={<ChatsPage />} />
+              <Route path="/partner/rating" element={<RatingPage />} />
+              <Route path="/partner/fill-reports" element={<FillReportsPage />} />
             </Route>
           </Route>
 

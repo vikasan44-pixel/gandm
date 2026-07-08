@@ -116,6 +116,7 @@ var baseTools = []toolSpec{
 	{"manage_customs_docs", "Работа с таможенными документами", "Placeholder для будущего таможенного модуля", "customs"},
 	{"receive_cargo_by_route", "Получение заявок на груз", "Открывает GET /api/cargo/available. Пока без фильтра по направлению — хранить маршруты участника негде (Этап 2)", "cargo"},
 	{"submit_offer", "Подача предложений на грузы", "Открывает POST /api/cargo/:id/offers (Этап 2)", "cargo"},
+	{"submit_fill_report", "Отчёты о заполняемости склада", "Открывает POST /api/warehouse/fill-report (Этап 6)", "warehouse"},
 }
 
 func seedTools(ctx context.Context, db *pgxpool.Pool) (map[string]uuid.UUID, error) {
@@ -145,7 +146,7 @@ type setSpec struct {
 
 var baseSets = []setSpec{
 	{"Базовый клиент", "Стартовый доступ для клиента: создание и просмотр заявок на груз", []string{"create_cargo_request", "view_cargo_requests"}},
-	{"Складской оператор", "Доступ для склада: складские места, заявки на груз и подача предложений", []string{"manage_warehouse_slots", "view_cargo_requests", "receive_cargo_by_route", "submit_offer"}},
+	{"Складской оператор", "Доступ для склада: складские места, заявки на груз, предложения и отчёты о заполняемости", []string{"manage_warehouse_slots", "view_cargo_requests", "receive_cargo_by_route", "submit_offer", "submit_fill_report"}},
 	{"Перевозчик", "Доступ для перевозчика: автопарк, заявки на груз и подача предложений", []string{"manage_fleet", "view_cargo_requests", "receive_cargo_by_route", "submit_offer"}},
 }
 
@@ -211,7 +212,7 @@ type participantSpec struct {
 var baseParticipants = []participantSpec{
 	{"client.pending@example.com", "ООО Клиент Ожидающий", models.ParticipantClient, models.UserStatusPending, "", nil, nil},
 	{"client.active@example.com", "ООО Клиент Активный", models.ParticipantClient, models.UserStatusActive, "", []string{"create_cargo_request", "view_cargo_requests"}, nil},
-	{"warehouse.active@example.com", "Склад Восток", models.ParticipantWarehouse, models.UserStatusActive, "", []string{"manage_warehouse_slots", "receive_cargo_by_route", "submit_offer"}, []routeSpec{{pointAlmaty, pointUrumqi}, {pointUrumqi, pointAlmaty}}},
+	{"warehouse.active@example.com", "Склад Восток", models.ParticipantWarehouse, models.UserStatusActive, "", []string{"manage_warehouse_slots", "receive_cargo_by_route", "submit_offer", "submit_fill_report"}, []routeSpec{{pointAlmaty, pointUrumqi}, {pointUrumqi, pointAlmaty}}},
 	{"carrier.blocked@example.com", "ИП Перевозчик Заблокированный", models.ParticipantCarrier, models.UserStatusBlocked, "", nil, []routeSpec{{pointKhorgos, pointAlmaty}}},
 	{"broker.rejected@example.com", "Брокер Отклонённый", models.ParticipantBroker, models.UserStatusRejected, "Документы не соответствуют требованиям", nil, nil},
 }

@@ -15,10 +15,13 @@ type ContactReveal struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// Chat belongs to exactly one of: a single cargo request (Stage 3 select)
+// or a consolidated request (shared client chat) — DB CHECK enforced.
 type Chat struct {
-	ID             uuid.UUID `json:"id"`
-	CargoRequestID uuid.UUID `json:"cargo_request_id"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID                    uuid.UUID  `json:"id"`
+	CargoRequestID        *uuid.UUID `json:"cargo_request_id,omitempty"`
+	ConsolidatedRequestID *uuid.UUID `json:"consolidated_request_id,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
 }
 
 type Message struct {

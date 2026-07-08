@@ -420,5 +420,5 @@ func (s *CargoService) ListConsolidatedOffersForClient(ctx context.Context, clie
 	if err != nil {
 		return nil, err
 	}
-	return anonymizeOffers(offers), nil
+	return s.anonymizeOffers(ctx, offers)
 }

@@ -5,13 +5,18 @@ import type {
   ChatMessage,
   ChatView,
   ConsolidatedRequest,
+  ConsolidatedSelectResult,
+  ConsolidatedStatusView,
   ConsolidationView,
+  FillReport,
   GeoPoint,
   MeResponse,
   NotificationItem,
   ParticipantRoute,
+  Rating,
   SelectOfferResult,
   UserLoginResponse,
+  UserRatingSummary,
 } from "./types";
 
 export function loginUser(email: string, password: string) {
@@ -106,6 +111,73 @@ export function createConsolidatedOffer(consolidatedId: string, input: CreateOff
 
 export function getConsolidatedOffers(consolidatedId: string) {
   return api.get<AnonymizedOffer[]>(`/consolidated/${consolidatedId}/offers`);
+}
+
+export function getConsolidatedStatus(consolidatedId: string) {
+  return api.get<ConsolidatedStatusView>(`/consolidated/${consolidatedId}`);
+}
+
+export function inviteConsolidated(consolidatedId: string) {
+  return api.post<{ status: string }>(`/consolidated/${consolidatedId}/invite`);
+}
+
+export function payConsolidated(consolidatedId: string) {
+  return api.post<unknown>(`/consolidated/${consolidatedId}/pay`);
+}
+
+export function acceptConsolidated(consolidatedId: string) {
+  return api.post<{ status: string; chat_id: string }>(`/consolidated/${consolidatedId}/accept`);
+}
+
+export function selectConsolidatedOffer(consolidatedId: string, offerId: string) {
+  return api.post<ConsolidatedSelectResult>(`/consolidated/${consolidatedId}/select`, {
+    offer_id: offerId,
+  });
+}
+
+export interface CreateRatingInput {
+  rated_user_id: string;
+  score: number;
+  comment?: string;
+  deal_id?: string;
+}
+
+export function createRating(input: CreateRatingInput) {
+  return api.post<Rating>("/ratings", input);
+}
+
+export function getUserRating(userId: string) {
+  return api.get<UserRatingSummary>(`/users/${userId}/rating`);
+}
+
+export function getMyReceivedRatings() {
+  return api.get<Rating[]>("/ratings/mine");
+}
+
+export interface CreateFillReportInput {
+  expectedFillPercent: number;
+  actualFillPercent: number;
+  reportDate: string; // YYYY-MM-DD
+  photo?: File | null;
+}
+
+export function createFillReport(input: CreateFillReportInput) {
+  const form = new FormData();
+  form.set("expected_fill_percent", String(input.expectedFillPercent));
+  form.set("actual_fill_percent", String(input.actualFillPercent));
+  form.set("report_date", input.reportDate);
+  if (input.photo) {
+    form.set("photo", input.photo);
+  }
+  return api.postForm<FillReport>("/warehouse/fill-report", form);
+}
+
+export function getMyFillReports() {
+  return api.get<FillReport[]>("/warehouse/fill-reports");
+}
+
+export function getLatestFillReport(userId: string) {
+  return api.get<FillReport>(`/users/${userId}/fill-report`);
 }
 
 export function getMyChats() {

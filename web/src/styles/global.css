@@ -1084,6 +1084,33 @@ textarea {
   color: var(--color-text-muted);
 }
 
+.rating-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+
+.rating-form__stars {
+  display: flex;
+  gap: 4px;
+}
+
+.rating-form__star {
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--color-border);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.rating-form__star--active {
+  color: var(--color-yellow);
+}
+
 .contact-card {
   border: 1px solid color-mix(in srgb, var(--color-green) 40%, var(--color-border));
   background: var(--color-green-bg);

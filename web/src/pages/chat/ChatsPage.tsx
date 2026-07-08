@@ -5,6 +5,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
+import { RatingForm } from "../../components/rating/RatingForm";
 import { ApiError } from "../../api/client";
 import { formatDateTime } from "../../utils/date";
 import { t } from "../../i18n";
@@ -183,6 +184,10 @@ function ChatWindow({ chat }: { chat: ChatView }) {
         ))}
         <div ref={scrollAnchorRef} />
       </div>
+
+      {chat.counterpart_user_id && (
+        <RatingForm ratedUserId={chat.counterpart_user_id} dealId={chat.deal_id} />
+      )}
 
       <form className="chat-form" onSubmit={handleSend}>
         <textarea

@@ -183,6 +183,26 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "already_revealed", "contact already revealed for this cargo request")
 	case errors.Is(err, service.ErrAlreadyResponded):
 		httpx.WriteError(w, http.StatusConflict, "already_responded", "this consolidation suggestion is already resolved")
+	case errors.Is(err, service.ErrSubscriptionRequired):
+		httpx.WriteError(w, http.StatusForbidden, "subscription_required", "a subscription is required to initiate consolidation")
+	case errors.Is(err, service.ErrPaymentRequired):
+		httpx.WriteError(w, http.StatusPaymentRequired, "payment_required", "a subscription or one-time payment is required to accept")
+	case errors.Is(err, service.ErrInviteWrongState):
+		httpx.WriteError(w, http.StatusConflict, "invite_wrong_state", "the consolidation invite is not in the required state")
+	case errors.Is(err, service.ErrNotInvitedClient):
+		httpx.WriteError(w, http.StatusForbidden, "not_invited", "only the invited client can perform this action")
+	case errors.Is(err, service.ErrConsolidationNotAccepted):
+		httpx.WriteError(w, http.StatusConflict, "not_accepted", "the consolidation must be accepted before selecting a carrier")
+	case errors.Is(err, repository.ErrAlreadyPaid):
+		httpx.WriteError(w, http.StatusConflict, "already_paid", "this consolidation is already paid")
+	case errors.Is(err, service.ErrAlreadyRated):
+		httpx.WriteError(w, http.StatusConflict, "already_rated", "you already rated this counterparty for this deal")
+	case errors.Is(err, service.ErrNoDealBetween):
+		httpx.WriteError(w, http.StatusForbidden, "no_deal", "rating requires a completed deal between the two users")
+	case errors.Is(err, service.ErrUnsupportedFile):
+		httpx.WriteError(w, http.StatusUnprocessableEntity, "unsupported_file", "unsupported file type")
+	case errors.Is(err, service.ErrFileTooLarge):
+		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds maximum size")
 	case errors.Is(err, service.ErrRouteExists):
 		httpx.WriteError(w, http.StatusConflict, "route_exists", "this route is already added")
 	case errors.Is(err, repository.ErrNotFound):

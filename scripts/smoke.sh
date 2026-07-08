@@ -1061,6 +1061,237 @@ else
   fail "Пропущено — нет токена админа или заявок U1/U3"
 fi
 
+step "40. Полный поток: инвайт → 402 без оплаты → sandbox-оплата → принятие"
+CHAT_CONS=""
+if [ -n "$CONS_ID" ] && [ -n "$TOKEN_A" ] && [ -n "$TOKEN_E" ]; then
+  STATUS=$(req POST "/consolidated/$CONS_ID/invite" "" "$TOKEN_A")
+  assert_status "Инвайт от клиента с подпиской (A)" "200" "$STATUS"
+
+  STATUS=$(req GET /notifications "" "$TOKEN_E")
+  if [ "$STATUS" = "200" ] && jq -e '[.[] | select(.type == "consolidation_invite")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "E получил уведомление consolidation_invite"
+  else
+    fail "У E нет уведомления consolidation_invite"
+  fi
+
+  STATUS=$(req POST "/consolidated/$CONS_ID/accept" "" "$TOKEN_E")
+  assert_status "Принятие без подписки и оплаты" "402" "$STATUS"
+
+  STATUS=$(req POST "/consolidated/$CONS_ID/pay" "" "$TOKEN_E")
+  assert_status "Sandbox-оплата" "200" "$STATUS"
+  if jq -e '.provider == "sandbox" and (.provider_ref | startswith("sandbox-"))' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "Оплата помечена sandbox-провайдером с фейковым ref"
+  else
+    fail "Ответ оплаты без sandbox-провайдера/ref"
+  fi
+
+  STATUS=$(req POST "/consolidated/$CONS_ID/accept" "" "$TOKEN_E")
+  assert_status "Принятие после оплаты" "200" "$STATUS"
+  CHAT_CONS="$(jq -r '.chat_id // empty' "$TMP_DIR/resp.json")"
+  [ -n "$CHAT_CONS" ] && pass "Общий чат создан" || fail "В ответе accept нет chat_id"
+
+  req GET "/consolidated/$CONS_ID" "" "$TOKEN_E" >/dev/null
+  if jq -e --arg email "$EMAIL_A" '.counterpart.email == $email' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "E видит контакт клиента A"
+  else
+    fail "E не видит контакт A после принятия"
+  fi
+  req GET "/consolidated/$CONS_ID" "" "$TOKEN_A" >/dev/null
+  if jq -e --arg email "$EMAIL_E" '.counterpart.email == $email' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "A видит контакт клиента E"
+  else
+    fail "A не видит контакт E после принятия"
+  fi
+else
+  fail "Пропущено — нет CONS_ID/токенов из шага 36"
+fi
+
+step "41. Общий чат двух клиентов работает"
+if [ -n "$CHAT_CONS" ]; then
+  STATUS=$(req POST "/chats/$CHAT_CONS/messages" '{"body":"Объединились! Обсудим перевозчика."}' "$TOKEN_A")
+  assert_status "A пишет в общий чат" "201" "$STATUS"
+  MSG_CONS="$(jq -r '.id // empty' "$TMP_DIR/resp.json")"
+
+  STATUS=$(req GET "/chats/$CHAT_CONS/messages" "" "$TOKEN_E")
+  if [ "$STATUS" = "200" ] && jq -e --arg id "$MSG_CONS" '[.[] | select(.id == $id)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "E видит сообщение A в общем чате"
+  else
+    fail "E не видит сообщение в общем чате (HTTP $STATUS)"
+  fi
+else
+  fail "Пропущено — нет chat_id"
+fi
+
+step "42. Выбрали разное → сделки нет, перевозчик не раскрыт"
+OFFER_C1=""
+OFFER_C2=""
+if [ -n "$CONS_ID" ] && [ -n "$TOKEN_B" ] && [ -n "$TOKEN_D" ] && [ -n "$ADMIN_TOKEN" ]; then
+  BODY=$(jq -n '{price:300000, conditions:"Оффер B на консолидацию", warehouse_fill_percent:70}')
+  STATUS=$(req POST "/consolidated/$CONS_ID/offers" "$BODY" "$TOKEN_B")
+  assert_status "Оффер B на консолидированную" "201" "$STATUS"
+  OFFER_C1="$(jq -r '.id // empty' "$TMP_DIR/resp.json")"
+
+  STATUS=$(req POST "/admin/users/$USER_ID_D/tools" "$(jq -n --arg r "$TOOL_ID_RECEIVE" --arg s "$TOOL_ID_SUBMIT" '{tool_ids:[$r,$s]}')" "$ADMIN_TOKEN")
+  assert_status "Выдача submit_offer участнику D" "200" "$STATUS"
+
+  BODY=$(jq -n '{price:280000, conditions:"Оффер D на консолидацию"}')
+  STATUS=$(req POST "/consolidated/$CONS_ID/offers" "$BODY" "$TOKEN_D")
+  assert_status "Оффер D на консолидированную" "201" "$STATUS"
+  OFFER_C2="$(jq -r '.id // empty' "$TMP_DIR/resp.json")"
+
+  STATUS=$(req POST "/consolidated/$CONS_ID/select" "$(jq -n --arg id "$OFFER_C1" '{offer_id:$id}')" "$TOKEN_A")
+  if [ "$STATUS" = "200" ] && jq -e '.selection_state == "waiting_other" and (.carrier_contact == null or (has("carrier_contact") | not))' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "A выбрал — ждём второго, контакт закрыт"
+  else
+    fail "Select A: HTTP $STATUS, состояние не waiting_other или контакт раскрыт"
+  fi
+
+  STATUS=$(req POST "/consolidated/$CONS_ID/select" "$(jq -n --arg id "$OFFER_C2" '{offer_id:$id}')" "$TOKEN_E")
+  if [ "$STATUS" = "200" ] && jq -e '.selection_state == "mismatch" and (.carrier_contact == null or (has("carrier_contact") | not))' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "Выбрали разное — mismatch, контакт закрыт"
+  else
+    fail "Select E (другой оффер): HTTP $STATUS, состояние не mismatch или контакт раскрыт"
+  fi
+
+  req GET "/consolidated/$CONS_ID" "" "$TOKEN_A" >/dev/null
+  if jq -e --arg email "$EMAIL_B" 'tostring | test($email) | not' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "Email перевозчика B не присутствует в статусе до совпадения"
+  else
+    fail "Email перевозчика утёк в статус до совпадения выбора"
+  fi
+else
+  fail "Пропущено — нет CONS_ID/токенов B/D/админа"
+fi
+
+step "43. Оба выбрали одно → selected, matched, контакт перевозчика раскрыт"
+if [ -n "$OFFER_C1" ] && [ -n "$TOKEN_E" ]; then
+  STATUS=$(req POST "/consolidated/$CONS_ID/select" "$(jq -n --arg id "$OFFER_C1" '{offer_id:$id}')" "$TOKEN_E")
+  if [ "$STATUS" = "200" ] && jq -e --arg email "$EMAIL_B" '.selection_state == "matched" and .carrier_contact.email == $email' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "E сменил выбор на оффер A — matched, контакт B раскрыт"
+  else
+    fail "Смена выбора E: HTTP $STATUS, не matched или контакт не раскрыт"
+  fi
+
+  req GET "/consolidated/$CONS_ID" "" "$TOKEN_A" >/dev/null
+  if jq -e --arg email "$EMAIL_B" '.selection_state == "matched" and .carrier_contact.email == $email and .consolidated.status == "matched"' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "A тоже видит matched + контакт перевозчика; заявка matched"
+  else
+    fail "Статус для A после совпадения некорректен"
+  fi
+
+  req GET "/consolidated/$CONS_ID/offers" "" "$TOKEN_A" >/dev/null
+  if jq -e --arg id "$OFFER_C1" '[.[] | select(.offer_id == $id and .status == "selected")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "Выбранный оффер в статусе selected"
+  else
+    fail "Оффер не перешёл в selected"
+  fi
+
+  STATUS=$(req GET "/chats/$CHAT_CONS/messages" "" "$TOKEN_B")
+  assert_status "Перевозчик добавлен в общий чат (читает)" "200" "$STATUS"
+else
+  fail "Пропущено — нет OFFER_C1"
+fi
+
+step "44. Посторонний не лезет в чужую консолидацию"
+if [ -n "$CONS_ID" ] && [ -n "$TOKEN_C" ]; then
+  STATUS=$(req GET "/consolidated/$CONS_ID" "" "$TOKEN_C")
+  assert_status "Посторонний GET статуса" "404" "$STATUS"
+  STATUS=$(req POST "/consolidated/$CONS_ID/select" "$(jq -n --arg id "$OFFER_C1" '{offer_id:$id}')" "$TOKEN_C")
+  assert_status "Посторонний select" "404" "$STATUS"
+else
+  fail "Пропущено — нет CONS_ID или токена C"
+fi
+
+step "45. Рейтинг: обе стороны сделки оценивают друг друга"
+if [ -n "$TOKEN_A" ] && [ -n "$TOKEN_B" ] && [ -n "$CARGO_ID" ]; then
+  BODY=$(jq -n --arg uid "$USER_ID_B" --arg deal "$CARGO_ID" \
+    '{rated_user_id:$uid, score:5, comment:"Отличный исполнитель", deal_id:$deal}')
+  STATUS=$(req POST /ratings "$BODY" "$TOKEN_A")
+  assert_status "Клиент оценивает исполнителя" "201" "$STATUS"
+
+  BODY=$(jq -n --arg uid "$USER_ID_A" --arg deal "$CARGO_ID" \
+    '{rated_user_id:$uid, score:4, comment:"Хороший клиент", deal_id:$deal}')
+  STATUS=$(req POST /ratings "$BODY" "$TOKEN_B")
+  assert_status "Исполнитель оценивает клиента" "201" "$STATUS"
+
+  BODY=$(jq -n --arg uid "$USER_ID_B" --arg deal "$CARGO_ID" '{rated_user_id:$uid, score:1, deal_id:$deal}')
+  STATUS=$(req POST /ratings "$BODY" "$TOKEN_A")
+  assert_status "Повторная оценка той же сделки" "409" "$STATUS"
+
+  STATUS=$(req GET "/users/$USER_ID_B/rating" "" "$TOKEN_A")
+  if [ "$STATUS" = "200" ] && jq -e '.average == 5 and .count >= 1' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "GET /users/:id/rating возвращает реальное среднее (5), не заглушку"
+  else
+    fail "GET /users/:id/rating (HTTP $STATUS): среднее не 5 или count 0"
+  fi
+
+  STATUS=$(req GET "/cargo/$CARGO_ID/offers" "" "$TOKEN_A")
+  if [ "$STATUS" = "200" ] && jq -e '[.[] | select(.rating == 5 and .rating_count == 1)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "В анонимном предложении рейтинг = реальное среднее"
+  else
+    fail "Анонимное предложение не показывает рейтинг 5 (HTTP $STATUS)"
+  fi
+
+  BODY=$(jq -n --arg uid "$USER_ID_B" --arg deal "$CARGO_ID" '{rated_user_id:$uid, score:3, deal_id:$deal}')
+  STATUS=$(req POST /ratings "$BODY" "$TOKEN_C")
+  assert_status "Оценка без сделки между сторонами" "403" "$STATUS"
+else
+  fail "Пропущено — нет токенов A/B или CARGO_ID"
+fi
+
+step "46. Заполняемость: склад отправляет отчёт с фото"
+TOKEN_W=""
+WAREHOUSE_ID=""
+STATUS=$(req POST /login '{"email":"warehouse.active@example.com","password":"Test12345!"}')
+assert_status "Логин тестового склада" "200" "$STATUS"
+if [ "$STATUS" = "200" ]; then
+  TOKEN_W="$(jq -r '.tokens.access_token // empty' "$TMP_DIR/resp.json")"
+  WAREHOUSE_ID="$(jq -r '.user.id // empty' "$TMP_DIR/resp.json")"
+fi
+
+if [ -n "$TOKEN_W" ] && [ -s "$PNG_FILE" ]; then
+  STATUS=$(curl -s -o "$TMP_DIR/resp.json" -w '%{http_code}' -X POST "$BASE_URL/warehouse/fill-report" \
+    -H "Authorization: Bearer $TOKEN_W" \
+    -F "expected_fill_percent=70" \
+    -F "actual_fill_percent=55" \
+    -F "report_date=$(date +%Y-%m-%d)" \
+    -F "photo=@${PNG_FILE};type=image/png" 2>/dev/null || echo "000")
+  assert_status "POST /warehouse/fill-report с фото" "201" "$STATUS"
+  if [ "$STATUS" = "201" ] && jq -e '.photo_view_url != null' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "Ответ содержит presigned-ссылку на фото"
+  else
+    fail "В ответе отчёта нет photo_view_url"
+  fi
+
+  STATUS=$(req GET /warehouse/fill-reports "" "$TOKEN_W")
+  if [ "$STATUS" = "200" ] && jq -e 'length >= 1' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "История отчётов склада не пуста"
+  else
+    fail "GET /warehouse/fill-reports (HTTP $STATUS) пуст"
+  fi
+else
+  fail "Пропущено — нет токена склада или тестового PNG"
+fi
+
+step "47. Последний отчёт публично виден; не-склад отправить не может"
+if [ -n "$WAREHOUSE_ID" ] && [ -n "$TOKEN_A" ]; then
+  STATUS=$(req GET "/users/$WAREHOUSE_ID/fill-report" "" "$TOKEN_A")
+  if [ "$STATUS" = "200" ] && jq -e '.actual_fill_percent == 55 and .expected_fill_percent == 70' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "GET /users/:id/fill-report возвращает последний отчёт (70/55)"
+  else
+    fail "GET /users/:id/fill-report (HTTP $STATUS): нет ожидаемых значений"
+  fi
+
+  STATUS=$(curl -s -o "$TMP_DIR/resp.json" -w '%{http_code}' -X POST "$BASE_URL/warehouse/fill-report" \
+    -H "Authorization: Bearer $TOKEN_A" \
+    -F "expected_fill_percent=10" \
+    -F "actual_fill_percent=10" \
+    -F "report_date=$(date +%Y-%m-%d)" 2>/dev/null || echo "000")
+  assert_status "Fill-report от участника без инструмента склада" "403" "$STATUS"
+else
+  fail "Пропущено — нет warehouse_id или токена клиента"
+fi
+
 step "Итоги"
 TOTAL=$((PASS_COUNT + FAIL_COUNT))
 echo "Всего проверок: $TOTAL, PASS: $PASS_COUNT, FAIL: $FAIL_COUNT"

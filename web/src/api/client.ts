@@ -33,7 +33,9 @@ interface ErrorBody {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
-  if (options.body && !headers.has("Content-Type")) {
+  // FormData must NOT get an explicit Content-Type — the browser sets
+  // multipart/form-data with the boundary itself.
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   if (authToken) {
@@ -95,4 +97,7 @@ export const api = {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  // multipart POST: no Content-Type header — the browser sets the boundary.
+  postForm: <T>(path: string, form: FormData) =>
+    request<T>(path, { method: "POST", body: form }),
 };

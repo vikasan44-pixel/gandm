@@ -2,26 +2,32 @@ import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useAsync } from "../../hooks/useAsync";
 import {
+  acceptConsolidated,
   agreeConsolidation,
   createCargo,
   declineConsolidation,
   getCargoOffers,
   getConsolidatedOffers,
+  getConsolidatedStatus,
   getConsolidation,
   getMyCargo,
   getMyConsolidated,
+  inviteConsolidated,
+  payConsolidated,
+  selectConsolidatedOffer,
   selectOffer,
 } from "../../api/participant";
+import { useAuth } from "../../auth/AuthContext";
 import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
 import { CargoStatusPill, OfferStatusPill } from "../../components/common/StatusPill";
 import { GeoPointField } from "../../components/geo/GeoPointField";
+import { RatingForm } from "../../components/rating/RatingForm";
 import { ApiError } from "../../api/client";
 import { formatDateTime } from "../../utils/date";
 import { t } from "../../i18n";
 import type {
-  AnonymizedOffer,
   CargoRequest,
   ConsolidatedRequest,
   GeoPoint,
@@ -279,8 +285,16 @@ function OffersPanel({
               {offers.data.map((offer) => (
                 <tr key={offer.offer_id}>
                   <td>№{offer.offer_number}</td>
-                  <td>{offer.rating}</td>
-                  <td>{offer.fill_percent != null ? `${offer.fill_percent}%` : "—"}</td>
+                  <td>{offer.rating !== null ? `★ ${offer.rating}` : "—"}</td>
+                  <td>
+                    {offer.fill_percent != null ? `${offer.fill_percent}%` : "—"}
+                    {offer.latest_fill_actual != null && (
+                      <div className="tool-row__key">
+                        {t("fill.latestLabel")}: {offer.latest_fill_expected ?? "—"}% /{" "}
+                        {offer.latest_fill_actual}%
+                      </div>
+                    )}
+                  </td>
                   <td>
                     {offer.price.toLocaleString("ru-RU")} {offer.currency}
                   </td>
@@ -333,6 +347,7 @@ function OffersPanel({
           <Link className="panel__link" to="/client/chats">
             {t("select.goToChat")}
           </Link>
+          <RatingForm ratedUserId={reveal.participant_id} dealId={cargo.id} />
         </div>
       )}
     </div>
@@ -411,45 +426,39 @@ function ConsolidationBlock({
   );
 }
 
-function AnonymizedOffersTable({ offers }: { offers: AnonymizedOffer[] }) {
-  return (
-    <div className="table-scroll">
-      <table className="table table--compact">
-        <thead>
-          <tr>
-            <th>{t("cargo.offerNumber")}</th>
-            <th>{t("cargo.rating")}</th>
-            <th>{t("cargo.fillPercent")}</th>
-            <th>{t("cargo.price")}</th>
-            <th>{t("users.columnStatus")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {offers.map((offer) => (
-            <tr key={offer.offer_id}>
-              <td>№{offer.offer_number}</td>
-              <td>{offer.rating}</td>
-              <td>{offer.fill_percent != null ? `${offer.fill_percent}%` : "—"}</td>
-              <td>
-                {offer.price.toLocaleString("ru-RU")} {offer.currency}
-              </td>
-              <td>
-                <OfferStatusPill status={offer.status} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ConsolidatedOffersPanel: the shared competition view. Offers are
-// anonymized exactly like single-cargo ones; selecting a winner on a
-// consolidated request is a later stage (both clients must pick the same
-// participant), so there is no select button here yet.
+// ConsolidatedOffersPanel: the full paid flow. Invite (subscribed
+// initiator) → pay/accept (invited client) → mutual client visibility +
+// shared chat → joint carrier selection. The carrier stays anonymous until
+// BOTH clients picked the same offer.
 function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedRequest }) {
+  const { user } = useAuth();
+  const status = useAsync(() => getConsolidatedStatus(consolidated.id), [consolidated.id]);
   const offers = useAsync(() => getConsolidatedOffers(consolidated.id), [consolidated.id]);
+  const [error, setError] = useState<string | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+
+  async function run(action: () => Promise<unknown>) {
+    setError(null);
+    setIsBusy(true);
+    try {
+      await action();
+      status.reload();
+      offers.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  function handleSelect(offerId: string) {
+    if (!window.confirm(t("consolidation.selectConfirm"))) return;
+    void run(() => selectConsolidatedOffer(consolidated.id, offerId));
+  }
+
+  const view = status.data;
+  const accepted = view?.consolidated.invite_status === "accepted";
+  const canChoose = accepted && view?.consolidated.status === "open";
 
   return (
     <div className="detail-panel">
@@ -461,13 +470,175 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
         {consolidated.total_volume_m3} м³ · {consolidated.total_weight_kg} кг
       </p>
 
+      {status.isLoading && <LoadingState />}
+      {status.error && <ErrorState message={status.error} onRetry={status.reload} />}
+
+      {view && view.consolidated.invite_status === "none" && (
+        <div className="consolidation-hint">
+          {user?.has_subscription ? (
+            <button
+              className="btn btn--primary btn--sm"
+              disabled={isBusy}
+              onClick={() => void run(() => inviteConsolidated(consolidated.id))}
+            >
+              {t("consolidation.inviteButton")}
+            </button>
+          ) : (
+            <p className="consolidation-hint__meta">{t("consolidation.inviteNeedsSub")}</p>
+          )}
+        </div>
+      )}
+
+      {view && view.consolidated.invite_status === "invited" && view.am_initiator && (
+        <div className="consolidation-hint">
+          <p className="consolidation-hint__meta">{t("consolidation.inviteSent")}</p>
+        </div>
+      )}
+
+      {view && view.consolidated.invite_status === "invited" && view.am_invited && (
+        <div className="consolidation-hint">
+          <p className="consolidation-hint__text">{t("consolidation.inviteReceived")}</p>
+          {user?.has_subscription || view.payment_done ? (
+            <>
+              {view.payment_done && (
+                <p className="consolidation-hint__meta">{t("consolidation.payDone")}</p>
+              )}
+              <button
+                className="btn btn--primary btn--sm"
+                disabled={isBusy}
+                onClick={() => void run(() => acceptConsolidated(consolidated.id))}
+              >
+                {t("consolidation.acceptButton")}
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="consolidation-hint__meta">{t("consolidation.payOrSubscribe")}</p>
+              <button
+                className="btn btn--primary btn--sm"
+                disabled={isBusy}
+                onClick={() => void run(() => payConsolidated(consolidated.id))}
+              >
+                {t("consolidation.payButton")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {view && accepted && view.counterpart && (
+        <div className="contact-card">
+          <h3 className="detail-panel__subtitle">{t("consolidation.counterpartTitle")}</h3>
+          <dl className="detail-panel__fields">
+            <div>
+              <dt>{t("select.company")}</dt>
+              <dd>{view.counterpart.company_name || "—"}</dd>
+            </div>
+            <div>
+              <dt>{t("login.email")}</dt>
+              <dd>{view.counterpart.email}</dd>
+            </div>
+            <div>
+              <dt>{t("users.phone")}</dt>
+              <dd>{view.counterpart.phone || "—"}</dd>
+            </div>
+          </dl>
+          <Link className="panel__link" to="/client/chats">
+            {t("consolidation.goToSharedChat")}
+          </Link>
+        </div>
+      )}
+
+      {view && accepted && view.selection_state === "waiting_other" && (
+        <p className="panel__hint">{t("consolidation.waitingOtherChoice")}</p>
+      )}
+      {view && accepted && view.selection_state === "mismatch" && (
+        <div className="form-error">{t("consolidation.mismatchChoice")}</div>
+      )}
+      {view && view.selection_state === "matched" && view.carrier_contact && (
+        <div className="contact-card">
+          <h3 className="detail-panel__subtitle">{t("consolidation.carrierTitle")}</h3>
+          <p className="panel__hint">{t("consolidation.matchedChoice")}</p>
+          <dl className="detail-panel__fields">
+            <div>
+              <dt>{t("select.company")}</dt>
+              <dd>{view.carrier_contact.company_name || "—"}</dd>
+            </div>
+            <div>
+              <dt>{t("login.email")}</dt>
+              <dd>{view.carrier_contact.email}</dd>
+            </div>
+            <div>
+              <dt>{t("users.phone")}</dt>
+              <dd>{view.carrier_contact.phone || "—"}</dd>
+            </div>
+          </dl>
+          {view.carrier_id && (
+            <RatingForm ratedUserId={view.carrier_id} dealId={consolidated.id} />
+          )}
+        </div>
+      )}
+
+      {error && <div className="form-error">{error}</div>}
+
       <h3 className="detail-panel__subtitle">{t("cargo.offersTitle")}</h3>
       {offers.isLoading && <LoadingState />}
       {offers.error && <ErrorState message={offers.error} onRetry={offers.reload} />}
       {offers.data && offers.data.length === 0 && (
         <EmptyState message={t("cargo.offersEmpty")} />
       )}
-      {offers.data && offers.data.length > 0 && <AnonymizedOffersTable offers={offers.data} />}
+      {offers.data && offers.data.length > 0 && (
+        <div className="table-scroll">
+          <table className="table table--compact">
+            <thead>
+              <tr>
+                <th>{t("cargo.offerNumber")}</th>
+                <th>{t("cargo.rating")}</th>
+                <th>{t("cargo.fillPercent")}</th>
+                <th>{t("cargo.price")}</th>
+                <th>{t("users.columnStatus")}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {offers.data.map((offer) => (
+                <tr key={offer.offer_id}>
+                  <td>№{offer.offer_number}</td>
+                  <td>{offer.rating !== null ? `★ ${offer.rating}` : "—"}</td>
+                  <td>
+                    {offer.fill_percent != null ? `${offer.fill_percent}%` : "—"}
+                    {offer.latest_fill_actual != null && (
+                      <div className="tool-row__key">
+                        {t("fill.latestLabel")}: {offer.latest_fill_expected ?? "—"}% /{" "}
+                        {offer.latest_fill_actual}%
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {offer.price.toLocaleString("ru-RU")} {offer.currency}
+                  </td>
+                  <td>
+                    <OfferStatusPill status={offer.status} />
+                  </td>
+                  <td>
+                    {canChoose && (
+                      <button
+                        className="btn btn--primary btn--sm"
+                        disabled={isBusy || view?.my_offer_id === offer.offer_id}
+                        onClick={() => handleSelect(offer.offer_id)}
+                      >
+                        {view?.my_offer_id
+                          ? t("consolidation.changeChoice")
+                          : t("consolidation.selectCarrier")}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

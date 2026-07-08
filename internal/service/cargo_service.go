@@ -13,6 +13,7 @@ import (
 
 	"gandm/internal/matching"
 	"gandm/internal/models"
+	"gandm/internal/payment"
 	"gandm/internal/repository"
 )
 
@@ -45,13 +46,14 @@ type CargoServiceConfig struct {
 }
 
 type CargoService struct {
-	db      *pgxpool.Pool
-	cfg     CargoServiceConfig
-	matcher *matching.Client
+	db       *pgxpool.Pool
+	cfg      CargoServiceConfig
+	matcher  *matching.Client
+	payments payment.Provider
 }
 
-func NewCargoService(db *pgxpool.Pool, cfg CargoServiceConfig, matcher *matching.Client) *CargoService {
-	return &CargoService{db: db, cfg: cfg, matcher: matcher}
+func NewCargoService(db *pgxpool.Pool, cfg CargoServiceConfig, matcher *matching.Client, payments payment.Provider) *CargoService {
+	return &CargoService{db: db, cfg: cfg, matcher: matcher, payments: payments}
 }
 
 func matchingParams(maxVolume, maxWeight float64, cfg CargoServiceConfig) matching.MatchParams {
@@ -277,15 +279,21 @@ func (s *CargoService) CreateOffer(ctx context.Context, participantID, cargoRequ
 // AnonymizedOffer is what the client sees: enough to compare and decide,
 // nothing that identifies who made the offer. OfferID is the offer's own
 // uuid — needed to select it — and reveals nothing about the participant.
-// Rating is a hardcoded 0 — real ratings are out of scope for this stage.
+// Rating is the participant's real average (nil = no ratings yet, shown as
+// "—", never a fake 0). LatestFill* mirror the participant's newest
+// warehouse fill report as bare numbers — joined server-side so the client
+// never learns whose report it is.
 type AnonymizedOffer struct {
-	OfferID     uuid.UUID          `json:"offer_id"`
-	OfferNumber int                `json:"offer_number"`
-	Rating      int                `json:"rating"`
-	FillPercent *float64           `json:"fill_percent,omitempty"`
-	Price       float64            `json:"price"`
-	Currency    string             `json:"currency"`
-	Status      models.OfferStatus `json:"status"`
+	OfferID            uuid.UUID          `json:"offer_id"`
+	OfferNumber        int                `json:"offer_number"`
+	Rating             *float64           `json:"rating"`
+	RatingCount        int                `json:"rating_count"`
+	FillPercent        *float64           `json:"fill_percent,omitempty"`
+	LatestFillExpected *float64           `json:"latest_fill_expected,omitempty"`
+	LatestFillActual   *float64           `json:"latest_fill_actual,omitempty"`
+	Price              float64            `json:"price"`
+	Currency           string             `json:"currency"`
+	Status             models.OfferStatus `json:"status"`
 }
 
 func (s *CargoService) ListOffersForClient(ctx context.Context, clientID, cargoRequestID uuid.UUID) ([]AnonymizedOffer, error) {
@@ -303,23 +311,54 @@ func (s *CargoService) ListOffersForClient(ctx context.Context, clientID, cargoR
 	if err != nil {
 		return nil, err
 	}
-	return anonymizeOffers(offers), nil
+	return s.anonymizeOffers(ctx, offers)
 }
 
 // anonymizeOffers strips participant identity from offers for the
-// client-facing views (single and consolidated competitions alike).
-func anonymizeOffers(offers []models.Offer) []AnonymizedOffer {
+// client-facing views (single and consolidated competitions alike),
+// enriching each row with the participant's real rating average and latest
+// fill report — numbers only, no identity.
+func (s *CargoService) anonymizeOffers(ctx context.Context, offers []models.Offer) ([]AnonymizedOffer, error) {
+	participantIDs := make([]uuid.UUID, 0, len(offers))
+	seen := make(map[uuid.UUID]bool, len(offers))
+	for _, o := range offers {
+		if !seen[o.ParticipantID] {
+			seen[o.ParticipantID] = true
+			participantIDs = append(participantIDs, o.ParticipantID)
+		}
+	}
+
+	ratingRepo := repository.NewRatingRepository(s.db)
+	ratings, err := ratingRepo.SummariesForUsers(ctx, participantIDs)
+	if err != nil {
+		return nil, err
+	}
+	fillRepo := repository.NewFillReportRepository(s.db)
+	fills, err := fillRepo.LatestForUsers(ctx, participantIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	anonymized := make([]AnonymizedOffer, 0, len(offers))
 	for i, o := range offers {
-		anonymized = append(anonymized, AnonymizedOffer{
+		row := AnonymizedOffer{
 			OfferID:     o.ID,
 			OfferNumber: i + 1,
-			Rating:      0,
 			FillPercent: o.WarehouseFillPercent,
 			Price:       o.Price,
 			Currency:    o.Currency,
 			Status:      o.Status,
-		})
+		}
+		if summary, ok := ratings[o.ParticipantID]; ok {
+			row.Rating = summary.Average
+			row.RatingCount = summary.Count
+		}
+		if report, ok := fills[o.ParticipantID]; ok {
+			expected, actual := report.ExpectedFillPercent, report.ActualFillPercent
+			row.LatestFillExpected = &expected
+			row.LatestFillActual = &actual
+		}
+		anonymized = append(anonymized, row)
 	}
-	return anonymized
+	return anonymized, nil
 }

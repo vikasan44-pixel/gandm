@@ -115,6 +115,7 @@ export interface UserDetail {
   user: User;
   tools: Tool[];
   verification?: VerificationRequest;
+  rating: UserRatingSummary;
 }
 
 export interface UserLoginResponse {
@@ -160,15 +161,44 @@ export type OfferStatus = "submitted" | "selected" | "rejected";
 // Deliberately identity-free: this is everything the client is allowed to
 // see about an offer. offer_id is the offer's own uuid (needed for select)
 // and reveals nothing about the participant. Never widen this with
-// participant fields.
+// participant fields. rating: null = no ratings yet (show "—", not 0);
+// latest_fill_* are the participant's newest fill report as bare numbers.
 export interface AnonymizedOffer {
   offer_id: string;
   offer_number: number;
-  rating: number;
+  rating: number | null;
+  rating_count: number;
   fill_percent?: number | null;
+  latest_fill_expected?: number | null;
+  latest_fill_actual?: number | null;
   price: number;
   currency: string;
   status: OfferStatus;
+}
+
+export interface UserRatingSummary {
+  average: number | null;
+  count: number;
+}
+
+export interface Rating {
+  id: string;
+  deal_id?: string | null;
+  rated_user_id: string;
+  rater_user_id: string;
+  score: number;
+  comment?: string | null;
+  created_at: string;
+}
+
+export interface FillReport {
+  id: string;
+  user_id: string;
+  expected_fill_percent: number;
+  actual_fill_percent: number;
+  photo_view_url?: string | null;
+  report_date: string;
+  created_at: string;
 }
 
 export interface RevealedContact {
@@ -179,6 +209,7 @@ export interface RevealedContact {
 
 export interface SelectOfferResult {
   contact: RevealedContact;
+  participant_id: string;
   chat_id: string;
   reveals_used: number;
   reveals_limit: number;
@@ -186,10 +217,12 @@ export interface SelectOfferResult {
 
 export interface ChatView {
   id: string;
-  cargo_request_id: string;
   origin_label: string;
   destination_label: string;
   counterpart_label: string;
+  // Set only for two-party chats — enables the in-chat rating form.
+  counterpart_user_id?: string | null;
+  deal_id: string;
   created_at: string;
 }
 
@@ -213,6 +246,8 @@ export interface ConsolidationView {
   created_at: string;
 }
 
+export type ConsolidatedInviteStatus = "none" | "invited" | "accepted";
+
 export interface ConsolidatedRequest {
   id: string;
   origin: GeoPoint;
@@ -221,7 +256,38 @@ export interface ConsolidatedRequest {
   total_weight_kg: number;
   member_request_ids: string[];
   status: CargoRequestStatus;
+  invite_status: ConsolidatedInviteStatus;
+  initiator_client_id?: string | null;
+  invited_client_id?: string | null;
+  chat_id?: string | null;
   created_at: string;
+}
+
+export interface ClientContact {
+  company_name: string;
+  email: string;
+  phone: string;
+}
+
+export type SelectionState = "none" | "waiting_other" | "mismatch" | "matched";
+
+export interface ConsolidatedStatusView {
+  consolidated: ConsolidatedRequest;
+  am_initiator: boolean;
+  am_invited: boolean;
+  payment_done: boolean;
+  counterpart?: ClientContact | null;
+  my_offer_id?: string | null;
+  other_has_chosen: boolean;
+  selection_state: SelectionState;
+  carrier_contact?: RevealedContact | null;
+  carrier_id?: string | null;
+}
+
+export interface ConsolidatedSelectResult {
+  selection_state: SelectionState;
+  carrier_contact?: RevealedContact | null;
+  carrier_id?: string | null;
 }
 
 export interface PlatformSettings {

@@ -3,6 +3,7 @@ import type {
   AdminLoginResponse,
   AuditLogEntry,
   DashboardStats,
+  FillReport,
   GeoPoint,
   ParticipantRoute,
   ParticipantType,
@@ -27,6 +28,10 @@ export function getDashboardStats() {
 
 export function getAuditLog(limit = 10, offset = 0) {
   return api.get<AuditLogEntry[]>(`/admin/audit-log?limit=${limit}&offset=${offset}`);
+}
+
+export function getUserFillReports(userId: string) {
+  return api.get<FillReport[]>(`/admin/users/${userId}/fill-reports`);
 }
 
 export function getUserRoutes(userId: string) {

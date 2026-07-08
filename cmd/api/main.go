@@ -16,6 +16,7 @@ import (
 	"gandm/internal/handlers"
 	"gandm/internal/matching"
 	appmiddleware "gandm/internal/middleware"
+	"gandm/internal/payment"
 	"gandm/internal/repository"
 	"gandm/internal/service"
 	"gandm/internal/storage"
@@ -63,13 +64,21 @@ func main() {
 
 	matchingClient := matching.NewClient(cfg.MatchingServiceURL)
 
+	paymentProvider, err := payment.NewProvider(cfg.PaymentProvider)
+	if err != nil {
+		log.Fatalf("payment provider: %v", err)
+	}
+
 	cargoSvc := service.NewCargoService(dbPool, service.CargoServiceConfig{
 		MatchRadiusCNKm:        cfg.MatchRadiusCNKm,
 		MatchRadiusKZKm:        cfg.MatchRadiusKZKm,
 		ContactLimitFree:       cfg.ContactLimitFree,
 		ContactLimitSubscribed: cfg.ContactLimitSubscribed,
-	}, matchingClient)
+	}, matchingClient, paymentProvider)
 	cargoHandler := handlers.NewCargoHandler(cargoSvc)
+
+	warehouseSvc := service.NewWarehouseService(dbPool, s3Client)
+	warehouseHandler := handlers.NewWarehouseHandler(warehouseSvc)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -107,8 +116,21 @@ func main() {
 			protected.Post("/cargo/{id}/consolidation/{sid}/agree", cargoHandler.AgreeConsolidation)
 			protected.Post("/cargo/{id}/consolidation/{sid}/decline", cargoHandler.DeclineConsolidation)
 			protected.Get("/consolidated/mine", cargoHandler.ListMyConsolidated)
+			protected.Get("/consolidated/{id}", cargoHandler.GetConsolidatedStatus)
+			protected.Post("/consolidated/{id}/invite", cargoHandler.InviteConsolidated)
+			protected.Post("/consolidated/{id}/pay", cargoHandler.PayConsolidated)
+			protected.Post("/consolidated/{id}/accept", cargoHandler.AcceptConsolidated)
+			protected.Post("/consolidated/{id}/select", cargoHandler.SelectConsolidatedOffer)
 			protected.Post("/consolidated/{id}/offers", cargoHandler.CreateConsolidatedOffer)
 			protected.Get("/consolidated/{id}/offers", cargoHandler.ListConsolidatedOffers)
+
+			protected.Post("/ratings", cargoHandler.CreateRating)
+			protected.Get("/ratings/mine", cargoHandler.ListMyReceivedRatings)
+			protected.Get("/users/{id}/rating", cargoHandler.GetUserRating)
+
+			protected.Post("/warehouse/fill-report", warehouseHandler.CreateFillReport)
+			protected.Get("/warehouse/fill-reports", warehouseHandler.ListMyFillReports)
+			protected.Get("/users/{id}/fill-report", warehouseHandler.GetLatestFillReport)
 
 			protected.Get("/chats/mine", cargoHandler.ListMyChats)
 			protected.Get("/chats/{id}/messages", cargoHandler.ListChatMessages)
@@ -156,6 +178,8 @@ func main() {
 
 				protected.Get("/settings", adminHandler.GetPlatformSettings)
 				protected.Patch("/settings", adminHandler.UpdatePlatformSettings)
+				protected.Post("/consolidated/{id}/payments", adminHandler.MarkConsolidatedPayment)
+				protected.Get("/users/{id}/fill-reports", adminHandler.ListUserFillReports)
 			})
 		})
 	})
