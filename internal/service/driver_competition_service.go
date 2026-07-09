@@ -187,7 +187,6 @@ func (s *CargoService) ListMyDriverCompetitions(ctx context.Context, warehouseID
 		return nil, err
 	}
 	routeRepo := repository.NewParticipantRouteRepository(s.db)
-	ratingRepo := repository.NewRatingRepository(s.db)
 
 	views := make([]DriverCompetitionView, 0, len(competitions))
 	for i := range competitions {
@@ -209,7 +208,7 @@ func (s *CargoService) ListMyDriverCompetitions(ctx context.Context, warehouseID
 				driverIDs = append(driverIDs, b.DriverID)
 			}
 		}
-		ratings, err := ratingRepo.SummariesForUsers(ctx, driverIDs)
+		ratings, err := s.compositeSummariesForUsers(ctx, driverIDs)
 		if err != nil {
 			return nil, err
 		}

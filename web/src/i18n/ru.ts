@@ -67,7 +67,16 @@ const ru = {
   rating: {
     title: "Рейтинг",
     navLabel: "Рейтинг",
-    myAverage: "Мой средний рейтинг",
+    myAverage: "Мой рейтинг",
+    compositeLabel: "Итоговый рейтинг",
+    breakdownTitle: "Из чего складывается",
+    breakdownHint:
+      "Рейтинг учитывает отзывы, срок работы на платформе, объём завершённых сделок и активность в чатах. Работайте внутри платформы — рейтинг растёт.",
+    componentReviews: "Средний балл отзывов",
+    componentDays: "Дней на платформе",
+    componentDeals: "Завершённых сделок",
+    componentMessages: "Сообщений в чатах",
+    componentActiveChats: "Чатов с двусторонней перепиской",
     noRatings: "нет оценок",
     ratingsCount: "оценок",
     formTitle: "Оцените контрагента",

@@ -1226,10 +1226,12 @@ if [ -n "$TOKEN_A" ] && [ -n "$TOKEN_B" ] && [ -n "$CARGO_ID" ]; then
   fi
 
   STATUS=$(req GET "/cargo/$CARGO_ID/offers" "" "$TOKEN_A")
-  if [ "$STATUS" = "200" ] && jq -e '[.[] | select(.rating == 5 and .rating_count == 1)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
-    pass "В анонимном предложении рейтинг = реальное среднее"
+  # Рейтинг в предложении — композитный (ТЗ §8: отзывы + срок + сделки +
+  # активность), поэтому проверяем «посчитан и не заглушка», а не точное 5.
+  if [ "$STATUS" = "200" ] && jq -e '[.[] | select(.rating != null and .rating > 0 and .rating_count == 1)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+    pass "В анонимном предложении композитный рейтинг посчитан (count=1)"
   else
-    fail "Анонимное предложение не показывает рейтинг 5 (HTTP $STATUS)"
+    fail "Анонимное предложение не показывает композитный рейтинг (HTTP $STATUS)"
   fi
 
   BODY=$(jq -n --arg uid "$USER_ID_B" --arg deal "$CARGO_ID" '{rated_user_id:$uid, score:3, deal_id:$deal}')

@@ -340,8 +340,8 @@ func (s *CargoService) anonymizeOffers(ctx context.Context, offers []models.Offe
 		}
 	}
 
-	ratingRepo := repository.NewRatingRepository(s.db)
-	ratings, err := ratingRepo.SummariesForUsers(ctx, participantIDs)
+	// Композитный рейтинг (ТЗ §8) — не только отзывы.
+	ratings, err := s.compositeSummariesForUsers(ctx, participantIDs)
 	if err != nil {
 		return nil, err
 	}

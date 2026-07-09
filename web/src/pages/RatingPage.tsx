@@ -26,16 +26,47 @@ export function RatingPage() {
         {summary.isLoading && <LoadingState />}
         {summary.error && <ErrorState message={summary.error} onRetry={summary.reload} />}
         {summary.data && (
-          <div className="stat-card stat-card--neutral">
-            <div className="stat-card__value">
-              {summary.data.average !== null ? `★ ${summary.data.average}` : "—"}
+          <>
+            <div className="stat-card stat-card--neutral">
+              <div className="stat-card__value">
+                {summary.data.composite !== null ? `★ ${summary.data.composite}` : "—"}
+              </div>
+              <div className="stat-card__label">{t("rating.compositeLabel")}</div>
             </div>
-            <div className="stat-card__label">
-              {summary.data.count > 0
-                ? `${summary.data.count} ${t("rating.ratingsCount")}`
-                : t("rating.noRatings")}
-            </div>
-          </div>
+
+            <h3 className="detail-panel__subtitle" style={{ marginTop: 16 }}>
+              {t("rating.breakdownTitle")}
+            </h3>
+            <p className="panel__hint">{t("rating.breakdownHint")}</p>
+            <dl className="detail-panel__fields">
+              <div>
+                <dt>{t("rating.componentReviews")}</dt>
+                <dd>
+                  {summary.data.average !== null
+                    ? `★ ${summary.data.average} (${summary.data.count} ${t("rating.ratingsCount")})`
+                    : t("rating.noRatings")}
+                </dd>
+              </div>
+              <div>
+                <dt>{t("rating.componentDays")}</dt>
+                <dd>{summary.data.days_on_platform}</dd>
+              </div>
+              <div>
+                <dt>{t("rating.componentDeals")}</dt>
+                <dd>{summary.data.completed_deals}</dd>
+              </div>
+              <div>
+                <dt>{t("rating.componentMessages")}</dt>
+                <dd>{summary.data.chat_messages}</dd>
+              </div>
+              <div>
+                <dt>{t("rating.componentActiveChats")}</dt>
+                <dd>
+                  {summary.data.chats_active} / {summary.data.chats_total}
+                </dd>
+              </div>
+            </dl>
+          </>
         )}
       </section>
 

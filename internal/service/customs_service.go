@@ -208,7 +208,7 @@ func (s *CargoService) ListCustomsOffersForClient(ctx context.Context, clientID,
 			repIDs = append(repIDs, o.CustomsRepID)
 		}
 	}
-	ratings, err := repository.NewRatingRepository(s.db).SummariesForUsers(ctx, repIDs)
+	ratings, err := s.compositeSummariesForUsers(ctx, repIDs)
 	if err != nil {
 		return nil, err
 	}

@@ -305,9 +305,18 @@ export interface DriverSelectResult {
   chat_id: string;
 }
 
+// Многофакторный рейтинг (ТЗ §8): composite — итоговая оценка 0–5 (null =
+// нет сигнала), average/count — классическое среднее по отзывам, остальные
+// поля — сырые компоненты для расшифровки «из чего складывается».
 export interface UserRatingSummary {
+  composite: number | null;
   average: number | null;
   count: number;
+  days_on_platform: number;
+  completed_deals: number;
+  chat_messages: number;
+  chats_total: number;
+  chats_active: number;
 }
 
 export interface Rating {

@@ -90,14 +90,20 @@ func (s *CargoService) CreateRating(ctx context.Context, raterID uuid.UUID, in C
 	return rating, nil
 }
 
-// GetUserRating is the public (any authenticated user) rating summary.
-func (s *CargoService) GetUserRating(ctx context.Context, userID uuid.UUID) (repository.UserRatingSummary, error) {
+// GetUserRating is the public (any authenticated user) rating breakdown:
+// composite score (ТЗ §8) plus the raw components, so participants see
+// what the number is made of. The old average/count fields keep their JSON
+// names for compatibility.
+func (s *CargoService) GetUserRating(ctx context.Context, userID uuid.UUID) (RatingBreakdown, error) {
 	userRepo := repository.NewUserRepository(s.db)
 	if _, err := userRepo.GetByID(ctx, userID); err != nil {
-		return repository.UserRatingSummary{}, err
+		return RatingBreakdown{}, err
 	}
-	ratingRepo := repository.NewRatingRepository(s.db)
-	return ratingRepo.SummaryForUser(ctx, userID)
+	components, err := repository.NewRatingRepository(s.db).ComponentsForUsers(ctx, []uuid.UUID{userID})
+	if err != nil {
+		return RatingBreakdown{}, err
+	}
+	return breakdownFromComponents(components[userID]), nil
 }
 
 func (s *CargoService) ListMyReceivedRatings(ctx context.Context, userID uuid.UUID) ([]models.Rating, error) {
