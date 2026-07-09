@@ -1,4 +1,4 @@
-import { getNotifications } from "../api/participant";
+import { getUnreadNotificationCount } from "../api/participant";
 
 // Module-level singleton poller for the unread-notifications badge.
 //
@@ -22,8 +22,8 @@ async function poll(): Promise<void> {
   if (inFlight) return;
   inFlight = true;
   try {
-    const items = await getNotifications();
-    lastCount = items.filter((n) => !n.is_read).length;
+    const res = await getUnreadNotificationCount();
+    lastCount = res.unread;
     subscribers.forEach((cb) => cb(lastCount));
   } catch {
     // A failed badge refresh isn't worth surfacing; the notifications page

@@ -4,6 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -62,7 +65,7 @@ func main() {
 	adminSvc := service.NewAdminService(dbPool, tokenManager, s3Client)
 	adminHandler := handlers.NewAdminHandler(adminSvc)
 
-	matchingClient := matching.NewClient(cfg.MatchingServiceURL)
+	matchingClient := matching.NewClient(cfg.MatchingServiceURL, cfg.MatchingSharedSecret)
 
 	paymentProvider, err := payment.NewProvider(cfg.PaymentProvider)
 	if err != nil {
@@ -87,9 +90,23 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 
+	// Unauthenticated credential endpoints get a per-IP limiter against
+	// password brute force; /refresh shares it (token guessing).
+	loginLimiter := appmiddleware.PerIPRateLimit(cfg.LoginRateLimitPerMin, time.Minute)
+
 	r.Route("/api", func(api chi.Router) {
-		api.Post("/register", registerHandler.Register)
-		api.Post("/login", registerHandler.Login)
+		api.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+			if err := dbPool.Ping(r.Context()); err != nil {
+				http.Error(w, `{"status":"degraded"}`, http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		})
+
+		api.With(loginLimiter).Post("/register", registerHandler.Register)
+		api.With(loginLimiter).Post("/login", registerHandler.Login)
+		api.With(loginLimiter).Post("/refresh", registerHandler.Refresh)
 
 		api.Group(func(protected chi.Router) {
 			protected.Use(tokenManager.RequireAuth)
@@ -140,11 +157,13 @@ func main() {
 			protected.Post("/routes", cargoHandler.AddMyRoute)
 			protected.Delete("/routes/{id}", cargoHandler.DeleteMyRoute)
 			protected.Get("/notifications", cargoHandler.ListMyNotifications)
+			protected.Get("/notifications/unread-count", cargoHandler.CountUnreadNotifications)
 			protected.Post("/notifications/read", cargoHandler.MarkNotificationsRead)
 		})
 
 		api.Route("/admin", func(admin chi.Router) {
-			admin.Post("/login", adminHandler.Login)
+			admin.With(loginLimiter).Post("/login", adminHandler.Login)
+			admin.With(loginLimiter).Post("/refresh", adminHandler.Refresh)
 
 			admin.Group(func(protected chi.Router) {
 				protected.Use(tokenManager.RequireAdminAuth)
@@ -184,9 +203,37 @@ func main() {
 		})
 	})
 
-	addr := ":" + cfg.ServerPort
-	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
+	server := &http.Server{
+		Addr:              ":" + cfg.ServerPort,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		// Above the 30s chi timeout so the middleware answers first with a
+		// proper 504 instead of the connection just dropping.
+		WriteTimeout: 65 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Graceful shutdown: stop accepting new connections on SIGINT/SIGTERM
+	// and let in-flight requests (and their transactions) finish.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("listening on %s", server.Addr)
+		errCh <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
 		log.Fatal(err)
+	case <-ctx.Done():
+		log.Println("shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}
 }

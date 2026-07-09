@@ -40,10 +40,19 @@ type Config struct {
 	// MatchingServiceURL is the Python consolidation-matching service.
 	// Capacity limits live in platform_settings (DB), not here.
 	MatchingServiceURL string
+	// MatchingSharedSecret guards the matching service when it's exposed
+	// beyond localhost. Empty = no auth header sent (local dev).
+	MatchingSharedSecret string
 
 	// PaymentProvider selects the payment backend ("sandbox" until a real
 	// integration exists).
 	PaymentProvider string
+
+	// LoginRateLimitPerMin caps unauthenticated credential endpoints
+	// (login/register/refresh) per client IP per minute — password
+	// brute-force protection. Local dev / smoke tests need it raised, since
+	// everything comes from one IP.
+	LoginRateLimitPerMin int
 }
 
 func Load() (*Config, error) {
@@ -102,6 +111,13 @@ func Load() (*Config, error) {
 	cfg.ContactLimitSubscribed = limitSub
 
 	cfg.MatchingServiceURL = getEnv("MATCHING_SERVICE_URL", "http://localhost:8000")
+	cfg.MatchingSharedSecret = os.Getenv("MATCHING_SHARED_SECRET")
+
+	loginRate, err := strconv.Atoi(getEnv("LOGIN_RATE_LIMIT_PER_MIN", "10"))
+	if err != nil || loginRate <= 0 {
+		return nil, fmt.Errorf("LOGIN_RATE_LIMIT_PER_MIN must be a positive integer, got %q", getEnv("LOGIN_RATE_LIMIT_PER_MIN", "10"))
+	}
+	cfg.LoginRateLimitPerMin = loginRate
 	cfg.PaymentProvider = getEnv("PAYMENT_PROVIDER", "sandbox")
 
 	accessTTL, err := time.ParseDuration(getEnv("JWT_ACCESS_TTL", "15m"))

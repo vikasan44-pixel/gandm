@@ -63,6 +63,27 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Use
 	return &u, nil
 }
 
+// GetByIDForUpdate is GetByID with a row lock — serializes operations that
+// consume per-user quotas (contact reveals), so parallel requests can't
+// both pass the limit check. Only meaningful inside a transaction.
+func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*models.User, error) {
+	const q = `
+		SELECT id, email, phone, company_name, participant_type, password_hash, status, has_subscription, language, created_at, last_active_at
+		FROM users WHERE id = $1 FOR UPDATE
+	`
+	var u models.User
+	err := r.db.QueryRow(ctx, q, id).Scan(
+		&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	const q = `
 		SELECT id, email, phone, company_name, participant_type, password_hash, status, has_subscription, language, created_at, last_active_at

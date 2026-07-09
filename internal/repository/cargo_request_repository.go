@@ -76,6 +76,14 @@ func (r *CargoRequestRepository) GetByID(ctx context.Context, id uuid.UUID) (*mo
 	return scanCargoRequest(r.db.QueryRow(ctx, q, id))
 }
 
+// GetByIDForUpdate is GetByID with a row lock — serializes concurrent
+// offer selection on the same cargo request. Only meaningful when the
+// repository wraps a transaction.
+func (r *CargoRequestRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*models.CargoRequest, error) {
+	q := `SELECT ` + cargoRequestColumns + ` FROM cargo_requests WHERE id = $1 FOR UPDATE`
+	return scanCargoRequest(r.db.QueryRow(ctx, q, id))
+}
+
 func (r *CargoRequestRepository) ListByClientID(ctx context.Context, clientID uuid.UUID) ([]models.CargoRequest, error) {
 	q := `SELECT ` + cargoRequestColumns + ` FROM cargo_requests WHERE client_id = $1 ORDER BY created_at DESC`
 	return queryCargoRequests(ctx, r.db, q, clientID)

@@ -77,6 +77,22 @@ func (s *AdminService) Login(ctx context.Context, email, password string) (*mode
 	return admin, tokens, nil
 }
 
+// Refresh exchanges a valid staff refresh token for a fresh token pair.
+func (s *AdminService) Refresh(ctx context.Context, refreshToken string) (auth.TokenPair, error) {
+	adminID, err := s.tokens.ParseRefreshToken(refreshToken, auth.SubjectAdmin)
+	if err != nil {
+		return auth.TokenPair{}, ErrInvalidCredentials
+	}
+	adminRepo := repository.NewAdminRepository(s.db)
+	if _, err := adminRepo.GetByID(ctx, adminID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return auth.TokenPair{}, ErrInvalidCredentials
+		}
+		return auth.TokenPair{}, err
+	}
+	return s.tokens.IssueTokenPair(adminID, auth.SubjectAdmin)
+}
+
 // DashboardStats aggregates the four dashboard cards. "new_today" and
 // "visits" use the server's local calendar day as the boundary for "today".
 // "visits" counts participants whose last_active_at falls today — the only

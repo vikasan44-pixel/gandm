@@ -15,9 +15,12 @@ export class ApiError extends Error {
 }
 
 type Listener = () => void;
+type RefreshHandler = () => Promise<string | null>;
 
 let authToken: string | null = null;
 let unauthorizedListener: Listener | null = null;
+let refreshHandler: RefreshHandler | null = null;
+let refreshInFlight: Promise<string | null> | null = null;
 
 export function setAuthToken(token: string | null) {
   authToken = token;
@@ -27,34 +30,89 @@ export function onUnauthorized(listener: Listener) {
   unauthorizedListener = listener;
 }
 
+// onRefreshToken registers the session-refresh callback (set by
+// AuthContext, which owns the refresh token). It must return the new
+// access token, or null if the session can't be refreshed.
+export function onRefreshToken(handler: RefreshHandler) {
+  refreshHandler = handler;
+}
+
+// tryRefresh is single-flight: concurrent 401s (e.g. a page firing several
+// requests after the access token expired) share one refresh call.
+function tryRefresh(): Promise<string | null> {
+  if (!refreshHandler) return Promise.resolve(null);
+  if (!refreshInFlight) {
+    refreshInFlight = refreshHandler().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+// requestTokenRefresh is the raw refresh call — used by AuthContext's
+// handler. Deliberately bypasses request() so a 401 here can't recurse.
+export async function requestTokenRefresh(
+  kind: "admin" | "user",
+  refreshToken: string
+): Promise<{ access_token: string; refresh_token: string } | null> {
+  const path = kind === "admin" ? "/admin/refresh" : "/refresh";
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      tokens?: { access_token?: string; refresh_token?: string };
+    };
+    if (!data.tokens?.access_token || !data.tokens.refresh_token) return null;
+    return { access_token: data.tokens.access_token, refresh_token: data.tokens.refresh_token };
+  } catch {
+    return null;
+  }
+}
+
 interface ErrorBody {
   error?: { code?: string; message?: string };
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers);
-  // FormData must NOT get an explicit Content-Type — the browser sets
-  // multipart/form-data with the boundary itself.
-  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  if (authToken) {
-    headers.set("Authorization", `Bearer ${authToken}`);
-  }
+  // Headers are rebuilt per attempt so a retry after refresh picks up the
+  // new access token.
+  const doFetch = async (): Promise<Response> => {
+    const headers = new Headers(options.headers);
+    // FormData must NOT get an explicit Content-Type — the browser sets
+    // multipart/form-data with the boundary itself.
+    if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    if (authToken) {
+      headers.set("Authorization", `Bearer ${authToken}`);
+    }
+    try {
+      return await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+    } catch {
+      throw new ApiError(
+        0,
+        "network_error",
+        "Не удалось связаться с сервером. Проверьте, что backend запущен."
+      );
+    }
+  };
 
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
-  } catch {
-    throw new ApiError(
-      0,
-      "network_error",
-      "Не удалось связаться с сервером. Проверьте, что backend запущен."
-    );
-  }
+  let res = await doFetch();
 
+  // Expired access token: refresh once and replay the request. Only if the
+  // refresh also fails do we treat the session as dead.
   if (res.status === 401) {
-    unauthorizedListener?.();
+    const newToken = await tryRefresh();
+    if (newToken) {
+      res = await doFetch();
+    }
+    if (res.status === 401) {
+      unauthorizedListener?.();
+    }
   }
 
   if (!res.ok) {

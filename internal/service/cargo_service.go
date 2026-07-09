@@ -220,6 +220,12 @@ func (s *CargoService) ListMyNotifications(ctx context.Context, userID uuid.UUID
 	return notifRepo.ListByUserID(ctx, userID)
 }
 
+// CountMyUnreadNotifications backs the badge poller.
+func (s *CargoService) CountMyUnreadNotifications(ctx context.Context, userID uuid.UUID) (int, error) {
+	notifRepo := repository.NewNotificationRepository(s.db)
+	return notifRepo.CountUnreadByUserID(ctx, userID)
+}
+
 // MarkMyNotificationsRead flags all of the caller's notifications as read.
 // Own-data operation — no status/tool gate, same as reading them.
 func (s *CargoService) MarkMyNotificationsRead(ctx context.Context, userID uuid.UUID) error {

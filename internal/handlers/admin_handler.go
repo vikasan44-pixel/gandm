@@ -49,6 +49,22 @@ func (h *AdminHandler) Login(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, adminLoginResponse{Admin: admin, Tokens: tokens})
 }
 
+func (h *AdminHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req refreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "refresh_token is required")
+		return
+	}
+
+	tokens, err := h.svc.Refresh(r.Context(), req.RefreshToken)
+	if err != nil {
+		writeAdminServiceError(w, err)
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, refreshResponse{Tokens: tokens})
+}
+
 func (h *AdminHandler) DashboardStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.svc.DashboardStats(r.Context())
 	if err != nil {

@@ -77,6 +77,10 @@ export function getNotifications() {
   return api.get<NotificationItem[]>("/notifications");
 }
 
+export function getUnreadNotificationCount() {
+  return api.get<{ unread: number }>("/notifications/unread-count");
+}
+
 export function markNotificationsRead() {
   return api.post<{ status: string }>("/notifications/read");
 }

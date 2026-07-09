@@ -256,6 +256,24 @@ func (s *RegistrationService) Login(ctx context.Context, email, password string)
 	return user, tokens, nil
 }
 
+// Refresh exchanges a valid refresh token for a fresh token pair. The
+// account must still exist; status is deliberately not checked, mirroring
+// Login — actual actions are gated by status/tool checks in the services.
+func (s *RegistrationService) Refresh(ctx context.Context, refreshToken string) (auth.TokenPair, error) {
+	userID, err := s.tokens.ParseRefreshToken(refreshToken, auth.SubjectUser)
+	if err != nil {
+		return auth.TokenPair{}, ErrInvalidCredentials
+	}
+	userRepo := repository.NewUserRepository(s.db)
+	if _, err := userRepo.GetByID(ctx, userID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return auth.TokenPair{}, ErrInvalidCredentials
+		}
+		return auth.TokenPair{}, err
+	}
+	return s.tokens.IssueTokenPair(userID, auth.SubjectUser)
+}
+
 func (s *RegistrationService) GetMe(ctx context.Context, userID uuid.UUID) (*models.User, *models.VerificationRequest, error) {
 	userRepo := repository.NewUserRepository(s.db)
 	user, err := userRepo.GetByID(ctx, userID)

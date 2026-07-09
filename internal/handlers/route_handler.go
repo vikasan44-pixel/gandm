@@ -86,6 +86,21 @@ func (h *CargoHandler) ListMyNotifications(w http.ResponseWriter, r *http.Reques
 	httpx.WriteJSON(w, http.StatusOK, items)
 }
 
+func (h *CargoHandler) CountUnreadNotifications(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+
+	count, err := h.svc.CountMyUnreadNotifications(r.Context(), userID)
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]int{"unread": count})
+}
+
 func (h *CargoHandler) MarkNotificationsRead(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFromContext(r.Context())
 	if !ok {

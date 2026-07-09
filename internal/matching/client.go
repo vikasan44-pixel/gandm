@@ -18,12 +18,17 @@ import (
 
 type Client struct {
 	baseURL string
+	secret  string
 	http    *http.Client
 }
 
-func NewClient(baseURL string) *Client {
+// NewClient builds the matching-service client. secret may be empty (open
+// local dev); when set it travels as X-Internal-Token and the Python side
+// must be started with the same MATCHING_SHARED_SECRET.
+func NewClient(baseURL, secret string) *Client {
 	return &Client{
 		baseURL: baseURL,
+		secret:  secret,
 		http:    &http.Client{Timeout: 5 * time.Second},
 	}
 }
@@ -115,6 +120,9 @@ func (c *Client) Match(ctx context.Context, candidates []models.CargoRequest, pa
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.secret != "" {
+		httpReq.Header.Set("X-Internal-Token", c.secret)
+	}
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

@@ -33,6 +33,15 @@ func (r *NotificationRepository) MarkAllReadByUserID(ctx context.Context, userID
 	return err
 }
 
+// CountUnreadByUserID is the cheap query behind the badge poller — the
+// frontend asks for this every 30s, so it must not fetch the full list.
+func (r *NotificationRepository) CountUnreadByUserID(ctx context.Context, userID uuid.UUID) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx,
+		`SELECT count(*) FROM notifications WHERE user_id = $1 AND is_read = false`, userID).Scan(&count)
+	return count, err
+}
+
 // ListByUserID returns the user's most recent notifications. Hard cap of
 // 100 until real pagination is needed — enough for the smoke test and any
 // near-term UI.

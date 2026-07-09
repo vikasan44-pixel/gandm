@@ -10,12 +10,29 @@ Run:
     uvicorn main:app --port 8000
 """
 
+import hmac
 import math
+import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="gandm-matching")
+
+# Optional shared secret: when MATCHING_SHARED_SECRET is set, every request
+# except /health must carry it in X-Internal-Token. Unset = open (local dev,
+# where the service listens on localhost only).
+_SHARED_SECRET = os.environ.get("MATCHING_SHARED_SECRET", "")
+
+
+@app.middleware("http")
+async def require_shared_secret(request: Request, call_next):
+    if _SHARED_SECRET and request.url.path != "/health":
+        token = request.headers.get("x-internal-token", "")
+        if not hmac.compare_digest(token, _SHARED_SECRET):
+            return JSONResponse(status_code=401, content={"detail": "invalid internal token"})
+    return await call_next(request)
 
 EARTH_RADIUS_KM = 6371.0
 

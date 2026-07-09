@@ -45,15 +45,20 @@ func (r *MessageRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.
 
 // ListByChatID returns messages oldest-first. A non-nil after narrows the
 // result to messages created strictly later — the polling cursor. Hard cap
-// of 200 per request until real pagination is needed.
+// of 200 per request until real pagination is needed; the initial load
+// (after == nil) keeps the NEWEST 200 so a long chat truncates its history,
+// not its live tail.
 func (r *MessageRepository) ListByChatID(ctx context.Context, chatID uuid.UUID, after *time.Time) ([]models.Message, error) {
-	q := `SELECT ` + messageColumns + ` FROM messages WHERE chat_id = $1`
+	var q string
 	args := []any{chatID}
 	if after != nil {
 		args = append(args, *after)
-		q += ` AND created_at > $2`
+		q = `SELECT ` + messageColumns + ` FROM messages WHERE chat_id = $1 AND created_at > $2 ORDER BY created_at ASC LIMIT 200`
+	} else {
+		q = `SELECT ` + messageColumns + ` FROM (
+			SELECT ` + messageColumns + ` FROM messages WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 200
+		) latest ORDER BY created_at ASC`
 	}
-	q += ` ORDER BY created_at ASC LIMIT 200`
 
 	rows, err := r.db.Query(ctx, q, args...)
 	if err != nil {

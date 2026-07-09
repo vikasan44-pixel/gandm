@@ -8,7 +8,12 @@ import {
 } from "react";
 import { login as apiAdminLogin } from "../api/admin";
 import { loginUser as apiUserLogin } from "../api/participant";
-import { onUnauthorized, setAuthToken } from "../api/client";
+import {
+  onRefreshToken,
+  onUnauthorized,
+  requestTokenRefresh,
+  setAuthToken,
+} from "../api/client";
 import type { Admin, User } from "../api/types";
 
 const STORAGE_KEY = "gandm_session";
@@ -18,6 +23,9 @@ type SessionKind = "admin" | "user";
 interface StoredSession {
   kind: SessionKind;
   token: string;
+  // Absent in sessions stored before refresh support shipped — those just
+  // log out on the first 401, same as the old behavior.
+  refreshToken?: string;
   admin: Admin | null;
   user: User | null;
 }
@@ -75,6 +83,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  useEffect(() => {
+    // Expired access token → exchange the refresh token for a new pair and
+    // hand the fresh access token back to the API client, which replays
+    // the failed request. Reads localStorage directly so the handler never
+    // sees a stale React closure.
+    onRefreshToken(async () => {
+      const current = loadSession();
+      if (!current?.refreshToken) return null;
+      const tokens = await requestTokenRefresh(current.kind, current.refreshToken);
+      if (!tokens) return null;
+      const next: StoredSession = {
+        ...current,
+        token: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+      };
+      setAuthToken(next.token);
+      setSession(next);
+      saveSession(next);
+      return tokens.access_token;
+    });
+  }, []);
+
   function applySession(next: StoredSession) {
     setAuthToken(next.token);
     setSession(next);
@@ -86,6 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applySession({
       kind: "admin",
       token: res.tokens.access_token,
+      refreshToken: res.tokens.refresh_token,
       admin: res.admin,
       user: null,
     });
@@ -96,6 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applySession({
       kind: "user",
       token: res.tokens.access_token,
+      refreshToken: res.tokens.refresh_token,
       admin: null,
       user: res.user,
     });

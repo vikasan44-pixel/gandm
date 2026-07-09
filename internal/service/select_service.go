@@ -38,14 +38,8 @@ type SelectOfferResult struct {
 // and the cargo matched, and opens a chat between the two. Everything
 // mutating happens in one transaction.
 func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID, offerID uuid.UUID) (*SelectOfferResult, error) {
-	client, err := s.requireEligibleUser(ctx, clientID)
-	if err != nil {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
 		return nil, err
-	}
-
-	limit := s.cfg.ContactLimitFree
-	if client.HasSubscription {
-		limit = s.cfg.ContactLimitSubscribed
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -54,8 +48,24 @@ func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID
 	}
 	defer tx.Rollback(ctx)
 
+	// Lock the client row first: the reveal-limit check below is
+	// check-then-insert, so parallel selects (even on different cargo)
+	// must serialize per client or the limit can be overshot.
+	userRepo := repository.NewUserRepository(tx)
+	client, err := userRepo.GetByIDForUpdate(ctx, clientID)
+	if err != nil {
+		return nil, err
+	}
+	limit := s.cfg.ContactLimitFree
+	if client.HasSubscription {
+		limit = s.cfg.ContactLimitSubscribed
+	}
+
+	// Row lock on the cargo request: two concurrent selects on the same
+	// cargo serialize here, and the loser sees status=matched below instead
+	// of closing the deal a second time.
 	cargoRepo := repository.NewCargoRequestRepository(tx)
-	cargo, err := cargoRepo.GetByID(ctx, cargoRequestID)
+	cargo, err := cargoRepo.GetByIDForUpdate(ctx, cargoRequestID)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +126,6 @@ func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID
 		return nil, err
 	}
 
-	userRepo := repository.NewUserRepository(tx)
 	participant, err := userRepo.GetByID(ctx, offer.ParticipantID)
 	if err != nil {
 		return nil, err

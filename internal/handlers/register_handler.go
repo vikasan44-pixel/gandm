@@ -79,6 +79,30 @@ func (h *RegisterHandler) Login(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, registerResponse{User: user, Tokens: tokens})
 }
 
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+type refreshResponse struct {
+	Tokens auth.TokenPair `json:"tokens"`
+}
+
+func (h *RegisterHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req refreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "refresh_token is required")
+		return
+	}
+
+	tokens, err := h.svc.Refresh(r.Context(), req.RefreshToken)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, refreshResponse{Tokens: tokens})
+}
+
 type meResponse struct {
 	User         *models.User                `json:"user"`
 	Verification *models.VerificationRequest `json:"verification"`
