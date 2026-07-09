@@ -88,6 +88,12 @@ func (s *CargoService) SetRouteDispatchThreshold(ctx context.Context, userID, ro
 	if err := repository.NewDispatchThresholdRepository(s.db).Upsert(ctx, threshold); err != nil {
 		return nil, err
 	}
+
+	// Автоматический режим конкурса водителей (ТЗ §11.4): порог достигнут —
+	// система объявляет конкурс сама, если он включён настройкой.
+	if err := s.maybeAutoAnnounceDriverCompetition(ctx, userID, route, threshold); err != nil {
+		return nil, err
+	}
 	return threshold, nil
 }
 

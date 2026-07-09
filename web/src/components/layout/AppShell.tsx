@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar, type NavItem } from "./Sidebar";
 import { subscribeUnreadCount } from "../../notifications/poller";
+import { useAuth } from "../../auth/AuthContext";
 import { t } from "../../i18n";
 
 function Shell({ brand, nav }: { brand: string; nav: NavItem[] }) {
@@ -16,12 +17,22 @@ function Shell({ brand, nav }: { brand: string; nav: NavItem[] }) {
 }
 
 export function AdminShell() {
+  const { admin } = useAuth();
+  // Модератор видит только свои разделы (ТЗ §19.6) — остальное скрыто в
+  // навигации и в любом случае заблокировано бэкендом (403).
+  const isFullAdmin = admin?.role === "admin";
   const nav: NavItem[] = [
     { to: "/admin/dashboard", label: t("nav.dashboard") },
     { to: "/admin/verification", label: t("nav.verification") },
     { to: "/admin/users", label: t("nav.users") },
-    { to: "/admin/tools", label: t("nav.tools") },
-    { to: "/admin/settings", label: t("settings.title") },
+    ...(isFullAdmin
+      ? [
+          { to: "/admin/tools", label: t("nav.tools") },
+          { to: "/admin/analytics", label: t("analytics.navLabel") },
+          { to: "/admin/moderators", label: t("moderators.navLabel") },
+          { to: "/admin/settings", label: t("settings.title") },
+        ]
+      : []),
   ];
   return <Shell brand={t("app.title")} nav={nav} />;
 }
@@ -48,6 +59,7 @@ export function PartnerShell() {
     { to: "/partner/routes", label: t("nav.routes") },
     { to: "/partner/fill-reports", label: t("fill.navLabel") },
     { to: "/partner/fleet", label: t("fleet.navLabel") },
+    { to: "/partner/driver-competitions", label: t("driverComp.navLabel") },
     { to: "/partner/customs", label: t("customs.navLabel") },
     { to: "/partner/chats", label: t("nav.chats") },
     { to: "/partner/rating", label: t("rating.navLabel") },

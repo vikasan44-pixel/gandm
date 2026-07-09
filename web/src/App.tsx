@@ -12,6 +12,8 @@ import { UserLoginPage } from "./pages/UserLoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { LandingPage } from "./pages/LandingPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { ModeratorsPage } from "./pages/ModeratorsPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import { UsersPage } from "./pages/UsersPage";
 import { ToolsPage } from "./pages/ToolsPage";
@@ -25,6 +27,7 @@ import { RatingPage } from "./pages/RatingPage";
 import { FillReportsPage } from "./pages/partner/FillReportsPage";
 import { FleetPage } from "./pages/partner/FleetPage";
 import { CustomsPage } from "./pages/partner/CustomsPage";
+import { DriverCompetitionsPage } from "./pages/partner/DriverCompetitionsPage";
 
 export default function App() {
   return (
@@ -41,6 +44,8 @@ export default function App() {
               <Route path="/admin/verification" element={<VerificationPage />} />
               <Route path="/admin/users" element={<UsersPage />} />
               <Route path="/admin/tools" element={<ToolsPage />} />
+              <Route path="/admin/analytics" element={<AnalyticsPage />} />
+              <Route path="/admin/moderators" element={<ModeratorsPage />} />
               <Route path="/admin/settings" element={<SettingsPage />} />
             </Route>
           </Route>
@@ -62,6 +67,7 @@ export default function App() {
               <Route path="/partner/rating" element={<RatingPage />} />
               <Route path="/partner/fill-reports" element={<FillReportsPage />} />
               <Route path="/partner/fleet" element={<FleetPage />} />
+              <Route path="/partner/driver-competitions" element={<DriverCompetitionsPage />} />
               <Route path="/partner/customs" element={<CustomsPage />} />
             </Route>
           </Route>

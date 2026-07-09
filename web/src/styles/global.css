@@ -1330,3 +1330,83 @@ textarea {
 .field-row .field {
   flex: 1;
 }
+
+/* ---------- analytics ---------- */
+
+.analytics-periods {
+  display: flex;
+  gap: 8px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 140px;
+  overflow-x: auto;
+  padding-top: 8px;
+}
+
+.bar-chart__col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 28px;
+}
+
+.bar-chart__bar {
+  width: 20px;
+  background: var(--color-accent);
+  border-radius: 3px 3px 0 0;
+}
+
+.bar-chart__label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.hbar-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hbar-list__row {
+  display: grid;
+  grid-template-columns: minmax(90px, 40%) 1fr 36px;
+  align-items: center;
+  gap: 8px;
+  white-space: normal;
+}
+
+.hbar-list__label {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hbar-list__bar {
+  display: block;
+  height: 14px;
+  min-width: 4px;
+  background: var(--color-accent);
+  opacity: 0.75;
+  border-radius: 3px;
+}
+
+.hbar-list__count {
+  font-size: 12px;
+  text-align: right;
+  color: var(--color-text-muted);
+}

@@ -168,6 +168,14 @@ func main() {
 			protected.Put("/routes/{id}/dispatch-threshold", cargoHandler.SetRouteDispatchThreshold)
 			protected.Delete("/routes/{id}/dispatch-threshold", cargoHandler.DeleteRouteDispatchThreshold)
 
+			// Конкурс водителей (ТЗ §11.4): склад объявляет и выбирает,
+			// водители ставят цены.
+			protected.Post("/driver-competitions", cargoHandler.CreateDriverCompetition)
+			protected.Get("/driver-competitions/mine", cargoHandler.ListMyDriverCompetitions)
+			protected.Get("/driver-competitions/open", cargoHandler.ListOpenDriverCompetitions)
+			protected.Post("/driver-competitions/{id}/bids", cargoHandler.CreateDriverBid)
+			protected.Post("/driver-competitions/{id}/bids/{bid}/select", cargoHandler.SelectDriverBid)
+
 			// Конкурс таможенных представителей (manage_customs_docs, ТЗ §10.2).
 			protected.Get("/customs/competitions", cargoHandler.ListCustomsCompetitions)
 			protected.Post("/consolidated/{id}/customs-offers", cargoHandler.CreateCustomsOffer)
@@ -185,6 +193,8 @@ func main() {
 			admin.Group(func(protected chi.Router) {
 				protected.Use(tokenManager.RequireAdminAuth)
 
+				// Доступно и админу, и модератору (ТЗ §19.6: модератор —
+				// верификация документов и просмотр участников).
 				protected.Get("/dashboard/stats", adminHandler.DashboardStats)
 				protected.Get("/audit-log", adminHandler.ListAuditLog)
 
@@ -195,27 +205,38 @@ func main() {
 
 				protected.Get("/users", adminHandler.ListUsers)
 				protected.Get("/users/{id}", adminHandler.GetUser)
-				protected.Post("/users/{id}/tools", adminHandler.SetUserTools)
-				protected.Post("/users/{id}/apply-set", adminHandler.ApplyPermissionSet)
-				protected.Post("/users/{id}/block", adminHandler.BlockUser)
-				protected.Post("/users/{id}/unblock", adminHandler.UnblockUser)
-				protected.Post("/users/{id}/subscription", adminHandler.SetUserSubscription)
 				protected.Get("/users/{id}/routes", adminHandler.ListUserRoutes)
-				protected.Post("/users/{id}/routes", adminHandler.AddUserRoute)
-				protected.Delete("/users/{id}/routes/{routeId}", adminHandler.DeleteUserRoute)
-
-				protected.Get("/tools", adminHandler.ListTools)
-				protected.Post("/tools", adminHandler.CreateTool)
-				protected.Patch("/tools/{id}", adminHandler.UpdateTool)
-
-				protected.Get("/permission-sets", adminHandler.ListPermissionSets)
-				protected.Post("/permission-sets", adminHandler.CreatePermissionSet)
-				protected.Patch("/permission-sets/{id}", adminHandler.UpdatePermissionSet)
-
-				protected.Get("/settings", adminHandler.GetPlatformSettings)
-				protected.Patch("/settings", adminHandler.UpdatePlatformSettings)
-				protected.Post("/consolidated/{id}/payments", adminHandler.MarkConsolidatedPayment)
 				protected.Get("/users/{id}/fill-reports", adminHandler.ListUserFillReports)
+
+				// Всё, что меняет доступы/деньги/настройки — только полный
+				// админ; модератор получает 403 admin_role_required.
+				protected.Group(func(full chi.Router) {
+					full.Use(adminHandler.RequireAdminRole)
+
+					full.Get("/analytics", adminHandler.Analytics)
+					full.Get("/moderators", adminHandler.ListModerators)
+					full.Post("/moderators", adminHandler.CreateModerator)
+
+					full.Post("/users/{id}/tools", adminHandler.SetUserTools)
+					full.Post("/users/{id}/apply-set", adminHandler.ApplyPermissionSet)
+					full.Post("/users/{id}/block", adminHandler.BlockUser)
+					full.Post("/users/{id}/unblock", adminHandler.UnblockUser)
+					full.Post("/users/{id}/subscription", adminHandler.SetUserSubscription)
+					full.Post("/users/{id}/routes", adminHandler.AddUserRoute)
+					full.Delete("/users/{id}/routes/{routeId}", adminHandler.DeleteUserRoute)
+
+					full.Get("/tools", adminHandler.ListTools)
+					full.Post("/tools", adminHandler.CreateTool)
+					full.Patch("/tools/{id}", adminHandler.UpdateTool)
+
+					full.Get("/permission-sets", adminHandler.ListPermissionSets)
+					full.Post("/permission-sets", adminHandler.CreatePermissionSet)
+					full.Patch("/permission-sets/{id}", adminHandler.UpdatePermissionSet)
+
+					full.Get("/settings", adminHandler.GetPlatformSettings)
+					full.Patch("/settings", adminHandler.UpdatePlatformSettings)
+					full.Post("/consolidated/{id}/payments", adminHandler.MarkConsolidatedPayment)
+				})
 			})
 		})
 	})

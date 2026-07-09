@@ -247,6 +247,64 @@ export interface CustomsSelectResult {
   customs_rep_id: string;
 }
 
+export type DriverCompetitionStatus = "open" | "closed";
+export type DriverBidStatus = "submitted" | "selected" | "rejected";
+
+export interface DriverCompetition {
+  id: string;
+  warehouse_id: string;
+  route_id: string;
+  volume_m3: number;
+  dispatch_date: string;
+  status: DriverCompetitionStatus;
+  created_at: string;
+}
+
+export interface DriverCompetitionBid {
+  id: string;
+  competition_id: string;
+  driver_id: string;
+  price: number;
+  currency: string;
+  comment: string;
+  status: DriverBidStatus;
+  created_at: string;
+}
+
+// Ставка глазами склада — водитель не раскрывается до выбора.
+export interface AnonymizedDriverBid {
+  bid_id: string;
+  bid_number: number;
+  rating: number | null;
+  rating_count: number;
+  price: number;
+  currency: string;
+  comment: string;
+  status: DriverBidStatus;
+}
+
+export interface DriverCompetitionView {
+  competition: DriverCompetition;
+  direction_label: string;
+  bids: AnonymizedDriverBid[];
+}
+
+// Конкурс глазами водителя — без названия склада (ТЗ §11.4).
+export interface OpenDriverCompetition {
+  competition_id: string;
+  direction_label: string;
+  volume_m3: number;
+  dispatch_date: string;
+  created_at: string;
+  my_bid?: DriverCompetitionBid | null;
+}
+
+export interface DriverSelectResult {
+  contact: RevealedContact;
+  driver_id: string;
+  chat_id: string;
+}
+
 export interface UserRatingSummary {
   average: number | null;
   count: number;

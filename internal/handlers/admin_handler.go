@@ -175,6 +175,10 @@ func writeAdminServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "key_taken", "tool key already exists")
 	case errors.Is(err, repository.ErrRouteExists):
 		httpx.WriteError(w, http.StatusConflict, "route_exists", "this route is already added")
+	case errors.Is(err, repository.ErrEmailTaken):
+		httpx.WriteError(w, http.StatusConflict, "email_taken", "email is already registered")
+	case errors.Is(err, service.ErrForbiddenRole):
+		httpx.WriteError(w, http.StatusForbidden, "admin_role_required", "this action requires the admin role")
 	case errors.Is(err, repository.ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "not found")
 	default:

@@ -14,6 +14,10 @@ const (
 	// SettingVehicleLimitPerUser caps vehicles per participant (ТЗ §11.1:
 	// «физлицо — максимум 2 машины»); absent/invalid → service default 2.
 	SettingVehicleLimitPerUser = "vehicle_limit_per_user"
+	// SettingDriverCompetitionAuto = "true" enables the automatic driver
+	// competition when a dispatch threshold is reached (ТЗ §11.4, ручной
+	// режим по умолчанию).
+	SettingDriverCompetitionAuto = "driver_competition_auto"
 )
 
 type SettingsRepository struct {

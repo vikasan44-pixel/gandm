@@ -7,6 +7,11 @@ import type {
   CustomsOffer,
   CustomsSelectResult,
   DispatchThreshold,
+  DriverCompetition,
+  DriverCompetitionBid,
+  DriverCompetitionView,
+  DriverSelectResult,
+  OpenDriverCompetition,
   RouteWithThreshold,
   Vehicle,
   ChatMessage,
@@ -149,6 +154,37 @@ export function setDispatchThreshold(routeId: string, thresholdM3: number, accru
 
 export function deleteDispatchThreshold(routeId: string) {
   return api.del<{ status: string }>(`/routes/${routeId}/dispatch-threshold`);
+}
+
+// --- конкурс водителей (ТЗ §11.4) ---
+
+export function createDriverCompetition(routeId: string, volumeM3: number, dispatchDate: string) {
+  return api.post<DriverCompetition>("/driver-competitions", {
+    route_id: routeId,
+    volume_m3: volumeM3,
+    dispatch_date: dispatchDate,
+  });
+}
+
+export function getMyDriverCompetitions() {
+  return api.get<DriverCompetitionView[]>("/driver-competitions/mine");
+}
+
+export function getOpenDriverCompetitions() {
+  return api.get<OpenDriverCompetition[]>("/driver-competitions/open");
+}
+
+export function createDriverBid(competitionId: string, price: number, comment: string) {
+  return api.post<DriverCompetitionBid>(`/driver-competitions/${competitionId}/bids`, {
+    price,
+    comment,
+  });
+}
+
+export function selectDriverBid(competitionId: string, bidId: string) {
+  return api.post<DriverSelectResult>(
+    `/driver-competitions/${competitionId}/bids/${bidId}/select`
+  );
 }
 
 // --- конкурс таможенных представителей (manage_customs_docs) ---

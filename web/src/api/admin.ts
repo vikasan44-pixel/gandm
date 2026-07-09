@@ -162,3 +162,51 @@ export interface UpdatePermissionSetInput {
 export function updatePermissionSet(id: string, patch: UpdatePermissionSetInput) {
   return api.patch<PermissionSet>(`/admin/permission-sets/${id}`, patch);
 }
+
+// --- аналитика (§19.7) и модераторы (§19.6) — только полный админ ---
+
+export interface AnalyticsDayCount {
+  day: string;
+  count: number;
+}
+
+export interface AnalyticsTypeCount {
+  type: string;
+  count: number;
+}
+
+export interface AnalyticsDirectionCount {
+  origin_label: string;
+  destination_label: string;
+  count: number;
+}
+
+export interface Analytics {
+  period_days: number;
+  new_users: number;
+  cargo_submitted: number;
+  deals_matched: number;
+  verified: number;
+  registrations_by_day: AnalyticsDayCount[];
+  participant_types: AnalyticsTypeCount[];
+  top_directions: AnalyticsDirectionCount[];
+}
+
+export function getAnalytics(days: number) {
+  return api.get<Analytics>(`/admin/analytics?days=${days}`);
+}
+
+export interface Moderator {
+  id: string;
+  email: string;
+  role: "admin" | "moderator";
+  created_at: string;
+}
+
+export function getModerators() {
+  return api.get<Moderator[]>("/admin/moderators");
+}
+
+export function createModerator(email: string, password: string) {
+  return api.post<Moderator>("/admin/moderators", { email, password });
+}

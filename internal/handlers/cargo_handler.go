@@ -213,6 +213,12 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "customs_already_selected", "a customs representative is already selected")
 	case errors.Is(err, repository.ErrAlreadyOffered):
 		httpx.WriteError(w, http.StatusConflict, "already_offered", "you already submitted an offer for this consolidation")
+	case errors.Is(err, repository.ErrAlreadyBid):
+		httpx.WriteError(w, http.StatusConflict, "already_bid", "you already bid on this competition")
+	case errors.Is(err, service.ErrCompetitionClosed):
+		httpx.WriteError(w, http.StatusConflict, "competition_closed", "this competition is already closed")
+	case errors.Is(err, service.ErrNoVehicles):
+		httpx.WriteError(w, http.StatusConflict, "no_vehicles", "add at least one vehicle to bid")
 	case errors.Is(err, repository.ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "not found")
 	default:
