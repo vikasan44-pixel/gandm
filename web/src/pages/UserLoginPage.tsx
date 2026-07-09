@@ -57,6 +57,9 @@ export function UserLoginPage() {
         <button className="btn btn--primary" type="submit" disabled={isSubmitting}>
           {isSubmitting ? t("common.loading") : t("login.submit")}
         </button>
+        <Link className="login-card__switch" to="/register">
+          {t("login.toRegister")}
+        </Link>
         <Link className="login-card__switch" to="/admin/login">
           {t("login.toAdminLogin")}
         </Link>

@@ -23,6 +23,30 @@ export function loginUser(email: string, password: string) {
   return api.post<UserLoginResponse>("/login", { email, password });
 }
 
+export interface RegisterInput {
+  email: string;
+  phone: string;
+  company_name: string;
+  participant_type: string;
+  password: string;
+}
+
+export function registerUser(input: RegisterInput) {
+  return api.post<UserLoginResponse>("/register", input);
+}
+
+// uploadRegistrationDocument sends one verification document; requires the
+// session issued right after registration.
+export function uploadRegistrationDocument(docType: string, file: File) {
+  const form = new FormData();
+  form.append("type", docType);
+  form.append("file", file);
+  return api.postForm<{ id: string; type: string; original_name: string }>(
+    "/register/documents",
+    form
+  );
+}
+
 export function getMe() {
   return api.get<MeResponse>("/me");
 }

@@ -7,7 +7,11 @@ import {
   type ReactNode,
 } from "react";
 import { login as apiAdminLogin } from "../api/admin";
-import { loginUser as apiUserLogin } from "../api/participant";
+import {
+  loginUser as apiUserLogin,
+  registerUser as apiUserRegister,
+  type RegisterInput,
+} from "../api/participant";
 import {
   onRefreshToken,
   onUnauthorized,
@@ -37,6 +41,7 @@ interface AuthContextValue {
   isReady: boolean;
   loginAdmin: (email: string, password: string) => Promise<void>;
   loginUser: (email: string, password: string) => Promise<User>;
+  registerUser: (input: RegisterInput) => Promise<User>;
   logout: () => void;
 }
 
@@ -134,6 +139,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.user;
   }
 
+  // registerUser creates the account and immediately applies the issued
+  // session, so the new user can upload verification documents right away.
+  async function registerUser(input: RegisterInput): Promise<User> {
+    const res = await apiUserRegister(input);
+    applySession({
+      kind: "user",
+      token: res.tokens.access_token,
+      refreshToken: res.tokens.refresh_token,
+      admin: null,
+      user: res.user,
+    });
+    return res.user;
+  }
+
   function logout() {
     setAuthToken(null);
     setSession(null);
@@ -148,6 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isReady,
       loginAdmin,
       loginUser,
+      registerUser,
       logout,
     }),
     [session, isReady]

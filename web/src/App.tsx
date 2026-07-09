@@ -9,6 +9,8 @@ import {
 import { AdminShell, ClientShell, PartnerShell } from "./components/layout/AppShell";
 import { LoginPage } from "./pages/LoginPage";
 import { UserLoginPage } from "./pages/UserLoginPage";
+import { RegisterPage } from "./pages/RegisterPage";
+import { LandingPage } from "./pages/LandingPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -28,6 +30,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<UserLoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/admin/login" element={<LoginPage />} />
 
           <Route element={<RequireAdmin />}>
@@ -59,7 +62,7 @@ export default function App() {
             </Route>
           </Route>
 
-          <Route path="/" element={<HomeRedirect />} />
+          <Route path="/" element={<LandingPage />} />
           <Route path="*" element={<HomeRedirect />} />
         </Routes>
       </BrowserRouter>

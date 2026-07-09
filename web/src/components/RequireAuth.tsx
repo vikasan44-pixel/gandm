@@ -28,12 +28,12 @@ export function RequirePartner() {
   return <Outlet />;
 }
 
-// Landing redirect for "/" and unknown paths: send whoever is logged in to
-// their own cabinet, everyone else to the participant login.
+// Redirect for unknown paths: send whoever is logged in to their own
+// cabinet, guests to the public landing page.
 export function HomeRedirect() {
   const { kind, user, isReady } = useAuth();
   if (!isReady) return null;
   if (kind === "admin") return <Navigate to="/admin/dashboard" replace />;
   if (kind === "user" && user) return <Navigate to={cabinetPathFor(user)} replace />;
-  return <Navigate to="/login" replace />;
+  return <Navigate to="/" replace />;
 }
