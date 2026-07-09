@@ -269,6 +269,50 @@ func (r *ConsolidationRepository) UpdateConsolidatedStatus(ctx context.Context, 
 	return nil
 }
 
+// ListMemberDescriptions returns the cargo descriptions («наименования
+// грузов») of the consolidation members — the packing-list preview shown to
+// customs representatives, deliberately free of any personal data (ТЗ §10.2).
+func (r *ConsolidationRepository) ListMemberDescriptions(ctx context.Context, consolidatedID uuid.UUID) ([]string, error) {
+	const q = `
+		SELECT c.description
+		FROM consolidated_requests cr
+		JOIN cargo_requests c ON cr.member_request_ids @> to_jsonb(c.id::text)
+		WHERE cr.id = $1
+		ORDER BY c.created_at ASC
+	`
+	rows, err := r.db.Query(ctx, q, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]string, 0, 2)
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		items = append(items, d)
+	}
+	return items, rows.Err()
+}
+
+// ListMatchedWithoutSelectedCustoms returns matched consolidations that
+// don't yet have a chosen customs representative — the open customs
+// competitions (ТЗ §10.2).
+func (r *ConsolidationRepository) ListMatchedWithoutSelectedCustoms(ctx context.Context) ([]models.ConsolidatedRequest, error) {
+	q := `
+		SELECT ` + consolidatedColumns + `
+		FROM consolidated_requests cr
+		WHERE cr.status = 'matched' AND NOT EXISTS (
+			SELECT 1 FROM consolidated_customs_offers co
+			WHERE co.consolidated_request_id = cr.id AND co.status = 'selected'
+		)
+		ORDER BY cr.created_at DESC
+	`
+	return r.queryConsolidated(ctx, q)
+}
+
 // ListMemberClients returns the distinct owners of the member cargo
 // requests — the two clients of the consolidation.
 func (r *ConsolidationRepository) ListMemberClients(ctx context.Context, consolidatedID uuid.UUID) ([]uuid.UUID, error) {

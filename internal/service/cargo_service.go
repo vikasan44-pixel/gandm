@@ -297,9 +297,15 @@ type AnonymizedOffer struct {
 	FillPercent        *float64           `json:"fill_percent,omitempty"`
 	LatestFillExpected *float64           `json:"latest_fill_expected,omitempty"`
 	LatestFillActual   *float64           `json:"latest_fill_actual,omitempty"`
-	Price              float64            `json:"price"`
-	Currency           string             `json:"currency"`
-	Status             models.OfferStatus `json:"status"`
+	// Dispatch* mirror the participant's «порог отправки» on their route
+	// matching this cargo direction (ТЗ §5.2: клиент видит, сколько кубов
+	// набрано и сколько осталось до отправки) — bare numbers, no identity.
+	DispatchThresholdM3 *float64 `json:"dispatch_threshold_m3,omitempty"`
+	DispatchAccruedM3   *float64 `json:"dispatch_accrued_m3,omitempty"`
+
+	Price    float64            `json:"price"`
+	Currency string             `json:"currency"`
+	Status   models.OfferStatus `json:"status"`
 }
 
 func (s *CargoService) ListOffersForClient(ctx context.Context, clientID, cargoRequestID uuid.UUID) ([]AnonymizedOffer, error) {
@@ -317,14 +323,14 @@ func (s *CargoService) ListOffersForClient(ctx context.Context, clientID, cargoR
 	if err != nil {
 		return nil, err
 	}
-	return s.anonymizeOffers(ctx, offers)
+	return s.anonymizeOffers(ctx, offers, cargo.Origin, cargo.Destination)
 }
 
 // anonymizeOffers strips participant identity from offers for the
 // client-facing views (single and consolidated competitions alike),
 // enriching each row with the participant's real rating average and latest
 // fill report — numbers only, no identity.
-func (s *CargoService) anonymizeOffers(ctx context.Context, offers []models.Offer) ([]AnonymizedOffer, error) {
+func (s *CargoService) anonymizeOffers(ctx context.Context, offers []models.Offer, origin, destination models.GeoPoint) ([]AnonymizedOffer, error) {
 	participantIDs := make([]uuid.UUID, 0, len(offers))
 	seen := make(map[uuid.UUID]bool, len(offers))
 	for _, o := range offers {
@@ -341,6 +347,11 @@ func (s *CargoService) anonymizeOffers(ctx context.Context, offers []models.Offe
 	}
 	fillRepo := repository.NewFillReportRepository(s.db)
 	fills, err := fillRepo.LatestForUsers(ctx, participantIDs)
+	if err != nil {
+		return nil, err
+	}
+	thresholdRepo := repository.NewDispatchThresholdRepository(s.db)
+	thresholds, err := thresholdRepo.ForUsersMatchingRoute(ctx, participantIDs, origin, destination, s.cfg.MatchRadiusCNKm, s.cfg.MatchRadiusKZKm)
 	if err != nil {
 		return nil, err
 	}
@@ -363,6 +374,11 @@ func (s *CargoService) anonymizeOffers(ctx context.Context, offers []models.Offe
 			expected, actual := report.ExpectedFillPercent, report.ActualFillPercent
 			row.LatestFillExpected = &expected
 			row.LatestFillActual = &actual
+		}
+		if t, ok := thresholds[o.ParticipantID]; ok {
+			threshold, accrued := t.ThresholdM3, t.AccruedM3
+			row.DispatchThresholdM3 = &threshold
+			row.DispatchAccruedM3 = &accrued
 		}
 		anonymized = append(anonymized, row)
 	}

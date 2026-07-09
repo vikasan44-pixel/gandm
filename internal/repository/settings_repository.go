@@ -11,6 +11,9 @@ import (
 const (
 	SettingMaxVolumeM3 = "max_volume_m3"
 	SettingMaxWeightKg = "max_weight_kg"
+	// SettingVehicleLimitPerUser caps vehicles per participant (ТЗ §11.1:
+	// «физлицо — максимум 2 машины»); absent/invalid → service default 2.
+	SettingVehicleLimitPerUser = "vehicle_limit_per_user"
 )
 
 type SettingsRepository struct {

@@ -171,9 +171,80 @@ export interface AnonymizedOffer {
   fill_percent?: number | null;
   latest_fill_expected?: number | null;
   latest_fill_actual?: number | null;
+  // Порог отправки склада по направлению груза (ТЗ §5.2): сколько м³ нужно
+  // для отправки и сколько уже набрано — без раскрытия, чей это склад.
+  dispatch_threshold_m3?: number | null;
+  dispatch_accrued_m3?: number | null;
   price: number;
   currency: string;
   status: OfferStatus;
+}
+
+export interface Vehicle {
+  id: string;
+  user_id: string;
+  axles: number;
+  capacity_kg: number;
+  length_m: number;
+  width_m: number;
+  height_m: number;
+  body_type: string;
+  current_location: string;
+  created_at: string;
+}
+
+export interface DispatchThreshold {
+  route_id: string;
+  threshold_m3: number;
+  accrued_m3: number;
+  updated_at: string;
+}
+
+export interface RouteWithThreshold {
+  route: ParticipantRoute;
+  threshold?: DispatchThreshold | null;
+}
+
+export type CustomsOfferStatus = "submitted" | "selected" | "rejected";
+
+export interface CustomsOffer {
+  id: string;
+  consolidated_request_id: string;
+  customs_rep_id: string;
+  price: number;
+  currency: string;
+  conditions: string;
+  status: CustomsOfferStatus;
+  created_at: string;
+}
+
+// Что видит таможенный представитель об открытом конкурсе: направление,
+// объёмы и наименования грузов — без личных данных клиентов (ТЗ §10.2).
+export interface CustomsCompetition {
+  consolidated_request_id: string;
+  direction_label: string;
+  total_volume_m3: number;
+  total_weight_kg: number;
+  cargo_names: string[];
+  created_at: string;
+  my_offer?: CustomsOffer | null;
+}
+
+// Identity-free по той же политике, что AnonymizedOffer.
+export interface AnonymizedCustomsOffer {
+  offer_id: string;
+  offer_number: number;
+  rating: number | null;
+  rating_count: number;
+  price: number;
+  currency: string;
+  conditions: string;
+  status: CustomsOfferStatus;
+}
+
+export interface CustomsSelectResult {
+  contact: RevealedContact;
+  customs_rep_id: string;
 }
 
 export interface UserRatingSummary {

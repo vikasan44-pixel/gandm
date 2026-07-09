@@ -205,6 +205,14 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds maximum size")
 	case errors.Is(err, service.ErrRouteExists):
 		httpx.WriteError(w, http.StatusConflict, "route_exists", "this route is already added")
+	case errors.Is(err, service.ErrVehicleLimitReached):
+		httpx.WriteError(w, http.StatusConflict, "vehicle_limit_reached", "vehicle limit reached for this account")
+	case errors.Is(err, service.ErrConsolidationNotMatched):
+		httpx.WriteError(w, http.StatusConflict, "not_matched", "the consolidation is not matched yet")
+	case errors.Is(err, service.ErrCustomsAlreadySelected):
+		httpx.WriteError(w, http.StatusConflict, "customs_already_selected", "a customs representative is already selected")
+	case errors.Is(err, repository.ErrAlreadyOffered):
+		httpx.WriteError(w, http.StatusConflict, "already_offered", "you already submitted an offer for this consolidation")
 	case errors.Is(err, repository.ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "not found")
 	default:

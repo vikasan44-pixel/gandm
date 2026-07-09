@@ -1,7 +1,14 @@
 import { api } from "./client";
 import type {
+  AnonymizedCustomsOffer,
   AnonymizedOffer,
   CargoRequest,
+  CustomsCompetition,
+  CustomsOffer,
+  CustomsSelectResult,
+  DispatchThreshold,
+  RouteWithThreshold,
+  Vehicle,
   ChatMessage,
   ChatView,
   ConsolidatedRequest,
@@ -95,6 +102,76 @@ export function addRoute(origin: GeoPoint, destination: GeoPoint) {
 
 export function deleteRoute(routeId: string) {
   return api.del<{ status: string }>(`/routes/${routeId}`);
+}
+
+// --- автопарк (manage_fleet) ---
+
+export interface VehicleInput {
+  axles: number;
+  capacity_kg: number;
+  length_m: number;
+  width_m: number;
+  height_m: number;
+  body_type: string;
+  current_location: string;
+}
+
+export function getVehicles() {
+  return api.get<Vehicle[]>("/fleet");
+}
+
+export function addVehicle(input: VehicleInput) {
+  return api.post<Vehicle>("/fleet", input);
+}
+
+export function updateVehicleLocation(vehicleId: string, currentLocation: string) {
+  return api.patch<Vehicle>(`/fleet/${vehicleId}/location`, {
+    current_location: currentLocation,
+  });
+}
+
+export function deleteVehicle(vehicleId: string) {
+  return api.del<{ status: string }>(`/fleet/${vehicleId}`);
+}
+
+// --- пороги отправки склада (manage_warehouse_slots) ---
+
+export function getDispatchThresholds() {
+  return api.get<RouteWithThreshold[]>("/dispatch-thresholds");
+}
+
+export function setDispatchThreshold(routeId: string, thresholdM3: number, accruedM3: number) {
+  return api.put<DispatchThreshold>(`/routes/${routeId}/dispatch-threshold`, {
+    threshold_m3: thresholdM3,
+    accrued_m3: accruedM3,
+  });
+}
+
+export function deleteDispatchThreshold(routeId: string) {
+  return api.del<{ status: string }>(`/routes/${routeId}/dispatch-threshold`);
+}
+
+// --- конкурс таможенных представителей (manage_customs_docs) ---
+
+export function getCustomsCompetitions() {
+  return api.get<CustomsCompetition[]>("/customs/competitions");
+}
+
+export function createCustomsOffer(consolidatedId: string, price: number, conditions: string) {
+  return api.post<CustomsOffer>(`/consolidated/${consolidatedId}/customs-offers`, {
+    price,
+    conditions,
+  });
+}
+
+export function getCustomsOffers(consolidatedId: string) {
+  return api.get<AnonymizedCustomsOffer[]>(`/consolidated/${consolidatedId}/customs-offers`);
+}
+
+export function selectCustomsOffer(consolidatedId: string, offerId: string) {
+  return api.post<CustomsSelectResult>(
+    `/consolidated/${consolidatedId}/customs-offers/${offerId}/select`
+  );
 }
 
 export function getNotifications() {

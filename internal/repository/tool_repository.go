@@ -144,6 +144,34 @@ func (r *ToolRepository) UserHasTool(ctx context.Context, userID uuid.UUID, key 
 	return exists, err
 }
 
+// ListActiveUserIDsWithTool returns all active users holding an active tool
+// — the notification fan-out audience for events that aren't tied to a
+// route (e.g. customs competitions on matched consolidations).
+func (r *ToolRepository) ListActiveUserIDsWithTool(ctx context.Context, key string) ([]uuid.UUID, error) {
+	const q = `
+		SELECT DISTINCT ut.user_id
+		FROM user_tools ut
+		JOIN tools t ON t.id = ut.tool_id
+		JOIN users u ON u.id = ut.user_id
+		WHERE t.key = $1 AND t.is_active = true AND u.status = 'active'
+	`
+	rows, err := r.db.Query(ctx, q, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // ListUserIDsWithToolAndRoute returns active users who both hold an active
 // tool AND have a route whose endpoints are each within the per-country
 // radius of the given cargo endpoints — the notification fan-out audience

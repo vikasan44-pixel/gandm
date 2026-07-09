@@ -156,6 +156,23 @@ func main() {
 			protected.Get("/routes", cargoHandler.ListMyRoutes)
 			protected.Post("/routes", cargoHandler.AddMyRoute)
 			protected.Delete("/routes/{id}", cargoHandler.DeleteMyRoute)
+
+			// Автопарк (manage_fleet, ТЗ §11.1).
+			protected.Get("/fleet", cargoHandler.ListMyVehicles)
+			protected.Post("/fleet", cargoHandler.AddMyVehicle)
+			protected.Patch("/fleet/{id}/location", cargoHandler.UpdateMyVehicleLocation)
+			protected.Delete("/fleet/{id}", cargoHandler.DeleteMyVehicle)
+
+			// Пороги отправки склада (manage_warehouse_slots, ТЗ §5.2).
+			protected.Get("/dispatch-thresholds", cargoHandler.ListMyDispatchThresholds)
+			protected.Put("/routes/{id}/dispatch-threshold", cargoHandler.SetRouteDispatchThreshold)
+			protected.Delete("/routes/{id}/dispatch-threshold", cargoHandler.DeleteRouteDispatchThreshold)
+
+			// Конкурс таможенных представителей (manage_customs_docs, ТЗ §10.2).
+			protected.Get("/customs/competitions", cargoHandler.ListCustomsCompetitions)
+			protected.Post("/consolidated/{id}/customs-offers", cargoHandler.CreateCustomsOffer)
+			protected.Get("/consolidated/{id}/customs-offers", cargoHandler.ListCustomsOffers)
+			protected.Post("/consolidated/{id}/customs-offers/{oid}/select", cargoHandler.SelectCustomsOffer)
 			protected.Get("/notifications", cargoHandler.ListMyNotifications)
 			protected.Get("/notifications/unread-count", cargoHandler.CountUnreadNotifications)
 			protected.Post("/notifications/read", cargoHandler.MarkNotificationsRead)

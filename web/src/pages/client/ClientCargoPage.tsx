@@ -10,11 +10,13 @@ import {
   getConsolidatedOffers,
   getConsolidatedStatus,
   getConsolidation,
+  getCustomsOffers,
   getMyCargo,
   getMyConsolidated,
   inviteConsolidated,
   payConsolidated,
   selectConsolidatedOffer,
+  selectCustomsOffer,
   selectOffer,
 } from "../../api/participant";
 import { useAuth } from "../../auth/AuthContext";
@@ -30,6 +32,7 @@ import { t } from "../../i18n";
 import type {
   CargoRequest,
   ConsolidatedRequest,
+  CustomsSelectResult,
   GeoPoint,
   SelectOfferResult,
 } from "../../api/types";
@@ -292,6 +295,12 @@ function OffersPanel({
                       <div className="tool-row__key">
                         {t("fill.latestLabel")}: {offer.latest_fill_expected ?? "—"}% /{" "}
                         {offer.latest_fill_actual}%
+                      </div>
+                    )}
+                    {offer.dispatch_threshold_m3 != null && (
+                      <div className="tool-row__key">
+                        {t("dispatch.offerLabel")} {offer.dispatch_accrued_m3 ?? 0} из{" "}
+                        {offer.dispatch_threshold_m3} м³
                       </div>
                     )}
                   </td>
@@ -579,6 +588,10 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
         </div>
       )}
 
+      {view && view.selection_state === "matched" && (
+        <CustomsSection consolidatedId={consolidated.id} />
+      )}
+
       {error && <div className="form-error">{error}</div>}
 
       <h3 className="detail-panel__subtitle">{t("cargo.offersTitle")}</h3>
@@ -613,6 +626,12 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
                         {offer.latest_fill_actual}%
                       </div>
                     )}
+                    {offer.dispatch_threshold_m3 != null && (
+                      <div className="tool-row__key">
+                        {t("dispatch.offerLabel")} {offer.dispatch_accrued_m3 ?? 0} из{" "}
+                        {offer.dispatch_threshold_m3} м³
+                      </div>
+                    )}
                   </td>
                   <td>
                     {offer.price.toLocaleString("ru-RU")} {offer.currency}
@@ -639,6 +658,135 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// CustomsSection — конкурс таможенных представителей на закрытой партии
+// (ТЗ §10.2/10.3): анонимные предложения, выбор любым из клиентов
+// (обсуждение — в общем чате), после выбора контакт раскрыт и представитель
+// подключён к общему чату.
+function CustomsSection({ consolidatedId }: { consolidatedId: string }) {
+  const offers = useAsync(() => getCustomsOffers(consolidatedId), [consolidatedId]);
+  const [result, setResult] = useState<CustomsSelectResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+
+  const selectedOffer = offers.data?.find((o) => o.status === "selected") ?? null;
+
+  async function handleSelect(offerId: string) {
+    if (!window.confirm(t("customs.selectConfirm"))) return;
+    setError(null);
+    setIsBusy(true);
+    try {
+      const res = await selectCustomsOffer(consolidatedId, offerId);
+      setResult(res);
+      offers.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  // Контакт уже выбранного представителя доступен через повторный
+  // идемпотентный select — подгружаем его, когда выбор сделан ранее.
+  async function revealSelected(offerId: string) {
+    setError(null);
+    setIsBusy(true);
+    try {
+      const res = await selectCustomsOffer(consolidatedId, offerId);
+      setResult(res);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <div className="consolidation-hint">
+      <h3 className="detail-panel__subtitle">{t("customs.clientSectionTitle")}</h3>
+
+      {offers.isLoading && <LoadingState />}
+      {offers.error && <ErrorState message={offers.error} onRetry={offers.reload} />}
+      {offers.data && offers.data.length === 0 && (
+        <p className="panel__hint">{t("customs.clientEmpty")}</p>
+      )}
+
+      {offers.data && offers.data.length > 0 && !selectedOffer && (
+        <>
+          <p className="panel__hint">{t("customs.clientHint")}</p>
+          <div className="table-scroll">
+            <table className="table table--compact">
+              <thead>
+                <tr>
+                  <th>{t("cargo.offerNumber")}</th>
+                  <th>{t("cargo.rating")}</th>
+                  <th>{t("cargo.price")}</th>
+                  <th>{t("customs.offerConditions")}</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {offers.data.map((offer) => (
+                  <tr key={offer.offer_id}>
+                    <td>№{offer.offer_number}</td>
+                    <td>{offer.rating !== null ? `★ ${offer.rating}` : "—"}</td>
+                    <td>
+                      {offer.price.toLocaleString("ru-RU")} {offer.currency}
+                    </td>
+                    <td>{offer.conditions || "—"}</td>
+                    <td>
+                      <button
+                        className="btn btn--primary btn--sm"
+                        disabled={isBusy}
+                        onClick={() => void handleSelect(offer.offer_id)}
+                      >
+                        {t("customs.select")}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {selectedOffer && !result && (
+        <button
+          className="btn btn--secondary btn--sm"
+          disabled={isBusy}
+          onClick={() => void revealSelected(selectedOffer.offer_id)}
+        >
+          {t("customs.selectedTitle")} →
+        </button>
+      )}
+
+      {result && (
+        <div className="contact-card">
+          <h3 className="detail-panel__subtitle">{t("customs.selectedTitle")}</h3>
+          <p className="panel__hint">{t("customs.selectedNote")}</p>
+          <dl className="detail-panel__fields">
+            <div>
+              <dt>{t("select.company")}</dt>
+              <dd>{result.contact.company_name || "—"}</dd>
+            </div>
+            <div>
+              <dt>{t("login.email")}</dt>
+              <dd>{result.contact.email}</dd>
+            </div>
+            <div>
+              <dt>{t("users.phone")}</dt>
+              <dd>{result.contact.phone || "—"}</dd>
+            </div>
+          </dl>
+          <RatingForm ratedUserId={result.customs_rep_id} dealId={consolidatedId} />
+        </div>
+      )}
+
+      {error && <div className="form-error">{error}</div>}
     </div>
   );
 }

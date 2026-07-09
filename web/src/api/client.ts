@@ -154,6 +154,11 @@ export const api = {
       method: "PATCH",
       body: body !== undefined ? JSON.stringify(body) : undefined,
     }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "PUT",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   // multipart POST: no Content-Type header — the browser sets the boundary.
   postForm: <T>(path: string, form: FormData) =>

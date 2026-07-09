@@ -47,6 +47,8 @@ export function PartnerShell() {
     { to: "/partner/cargo", label: t("nav.availableCargo") },
     { to: "/partner/routes", label: t("nav.routes") },
     { to: "/partner/fill-reports", label: t("fill.navLabel") },
+    { to: "/partner/fleet", label: t("fleet.navLabel") },
+    { to: "/partner/customs", label: t("customs.navLabel") },
     { to: "/partner/chats", label: t("nav.chats") },
     { to: "/partner/rating", label: t("rating.navLabel") },
     { to: "/partner/notifications", label: t("nav.notifications"), badge: unreadCount },

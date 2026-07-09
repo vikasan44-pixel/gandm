@@ -1319,3 +1319,14 @@ textarea {
   color: var(--color-green);
   white-space: normal;
 }
+
+/* ---------- fleet / customs forms ---------- */
+
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.field-row .field {
+  flex: 1;
+}

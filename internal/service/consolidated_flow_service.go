@@ -463,6 +463,12 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 				return nil, err
 			}
 		}
+
+		// The batch is heading out — open the customs-clearance competition
+		// for tooled representatives (ТЗ §10.2).
+		if err := s.notifyCustomsReps(ctx, tx, cons); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

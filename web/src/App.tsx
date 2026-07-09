@@ -23,6 +23,8 @@ import { NotificationsPage } from "./pages/partner/NotificationsPage";
 import { ChatsPage } from "./pages/chat/ChatsPage";
 import { RatingPage } from "./pages/RatingPage";
 import { FillReportsPage } from "./pages/partner/FillReportsPage";
+import { FleetPage } from "./pages/partner/FleetPage";
+import { CustomsPage } from "./pages/partner/CustomsPage";
 
 export default function App() {
   return (
@@ -59,6 +61,8 @@ export default function App() {
               <Route path="/partner/chats" element={<ChatsPage />} />
               <Route path="/partner/rating" element={<RatingPage />} />
               <Route path="/partner/fill-reports" element={<FillReportsPage />} />
+              <Route path="/partner/fleet" element={<FleetPage />} />
+              <Route path="/partner/customs" element={<CustomsPage />} />
             </Route>
           </Route>
 

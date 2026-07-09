@@ -414,11 +414,15 @@ func (s *CargoService) ListConsolidatedOffersForClient(ctx context.Context, clie
 	if !isMember {
 		return nil, repository.ErrNotFound
 	}
+	cons, err := consRepo.GetConsolidatedByID(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
 
 	offerRepo := repository.NewOfferRepository(s.db)
 	offers, err := offerRepo.ListByConsolidatedRequestID(ctx, consolidatedID)
 	if err != nil {
 		return nil, err
 	}
-	return s.anonymizeOffers(ctx, offers)
+	return s.anonymizeOffers(ctx, offers, cons.Origin, cons.Destination)
 }
