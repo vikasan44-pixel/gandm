@@ -345,12 +345,37 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 	}
 	defer tx.Rollback(ctx)
 
-	cons, err := s.getConsolidatedForMember(ctx, tx, clientID, consolidatedID)
+	consRepo := repository.NewConsolidationRepository(tx)
+	isMember, err := consRepo.IsConsolidatedMember(ctx, clientID, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, repository.ErrNotFound
+	}
+	// Row lock on the consolidation serializes the two clients: when both
+	// select "simultaneously", the second transaction waits here and then
+	// sees the status the first one committed, so the deal-closing side
+	// effects below run exactly once.
+	cons, err := consRepo.GetConsolidatedByIDForUpdate(ctx, consolidatedID)
 	if err != nil {
 		return nil, err
 	}
 	if cons.InviteStatus != models.InviteAccepted {
 		return nil, ErrConsolidationNotAccepted
+	}
+	if cons.Status == models.CargoRequestMatched {
+		// The other client's concurrent call already closed the deal —
+		// don't repeat side effects or notifications, just reveal the
+		// matched carrier.
+		result, err := s.consolidatedMatchedResult(ctx, tx, clientID, consolidatedID)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return result, nil
 	}
 	if cons.Status != models.CargoRequestOpen {
 		return nil, ErrCargoNotOpen
@@ -365,7 +390,6 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 		return nil, fmt.Errorf("%w: offer does not belong to this consolidated request", ErrInvalidInput)
 	}
 
-	consRepo := repository.NewConsolidationRepository(tx)
 	if err := consRepo.UpsertSelection(ctx, &models.ConsolidatedSelection{
 		ConsolidatedRequestID: consolidatedID,
 		ClientID:              clientID,
@@ -444,5 +468,40 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	return result, nil
+}
+
+// consolidatedMatchedResult rebuilds the "matched" response for a selection
+// call that arrives after the deal is already closed — read-only, so the
+// race loser gets the revealed carrier without duplicate side effects.
+func (s *CargoService) consolidatedMatchedResult(ctx context.Context, q repository.Querier, clientID, consolidatedID uuid.UUID) (*ConsolidatedSelectResult, error) {
+	consRepo := repository.NewConsolidationRepository(q)
+	selections, err := consRepo.ListSelections(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	var mine, other *uuid.UUID
+	for i := range selections {
+		if selections[i].ClientID == clientID {
+			mine = &selections[i].OfferID
+		} else {
+			other = &selections[i].OfferID
+		}
+	}
+	result := &ConsolidatedSelectResult{SelectionState: s.selectionState(mine, other)}
+	if result.SelectionState != "matched" {
+		return result, nil
+	}
+
+	offer, err := repository.NewOfferRepository(q).GetByID(ctx, *mine)
+	if err != nil {
+		return nil, err
+	}
+	carrier, err := repository.NewUserRepository(q).GetByID(ctx, offer.ParticipantID)
+	if err != nil {
+		return nil, err
+	}
+	result.CarrierContact = &RevealedContact{CompanyName: carrier.CompanyName, Email: carrier.Email, Phone: carrier.Phone}
+	result.CarrierID = &carrier.ID
 	return result, nil
 }

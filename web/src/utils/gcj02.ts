@@ -3,7 +3,9 @@
 // internal/geo/geo.go) — every Amap coordinate must pass through here
 // before being sent to the API. Standard approximate inverse: compute the
 // forward offset at the point and subtract it; error is a couple of meters,
-// negligible against the 25 km matching radius.
+// negligible against the matching radius, which comes from backend config
+// (MATCH_RADIUS_CN_KM / MATCH_RADIUS_KZ_KM) and is tens to a hundred km
+// depending on the country.
 
 const A = 6378245.0;
 const EE = 0.00669342162296594323;

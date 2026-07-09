@@ -149,6 +149,18 @@ func (r *ConsolidationRepository) CreateConsolidated(ctx context.Context, c *mod
 
 func (r *ConsolidationRepository) GetConsolidatedByID(ctx context.Context, id uuid.UUID) (*models.ConsolidatedRequest, error) {
 	q := `SELECT ` + consolidatedColumns + ` FROM consolidated_requests WHERE id = $1`
+	return r.getConsolidatedRow(ctx, q, id)
+}
+
+// GetConsolidatedByIDForUpdate is GetConsolidatedByID with a row lock —
+// serializes concurrent deal closing (joint offer selection). Only
+// meaningful when the repository wraps a transaction.
+func (r *ConsolidationRepository) GetConsolidatedByIDForUpdate(ctx context.Context, id uuid.UUID) (*models.ConsolidatedRequest, error) {
+	q := `SELECT ` + consolidatedColumns + ` FROM consolidated_requests WHERE id = $1 FOR UPDATE`
+	return r.getConsolidatedRow(ctx, q, id)
+}
+
+func (r *ConsolidationRepository) getConsolidatedRow(ctx context.Context, q string, id uuid.UUID) (*models.ConsolidatedRequest, error) {
 	var c models.ConsolidatedRequest
 	err := scanConsolidatedFields(r.db.QueryRow(ctx, q, id), &c)
 	if errors.Is(err, pgx.ErrNoRows) {
