@@ -131,6 +131,10 @@ func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID
 		return nil, err
 	}
 
+	// Повторная сделка с тем же партнёром — обе стороны получают просьбу
+	// подтвердить её документом (ТЗ §6.2).
+	NotifyRepeatDeal(ctx, tx, cargoRequestID, clientID, offer.ParticipantID)
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}

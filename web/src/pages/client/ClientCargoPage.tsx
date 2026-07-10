@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useAsync } from "../../hooks/useAsync";
 import {
   acceptConsolidated,
+  addFavorite,
   agreeConsolidation,
   createCargo,
   declineConsolidation,
@@ -356,10 +357,39 @@ function OffersPanel({
           <Link className="panel__link" to="/client/chats">
             {t("select.goToChat")}
           </Link>
+          <FavoriteButton participantId={reveal.participant_id} />
           <RatingForm ratedUserId={reveal.participant_id} dealId={cargo.id} />
         </div>
       )}
     </div>
+  );
+}
+
+// «В избранное» (ТЗ §6.2) — доступно только после раскрытия контакта, то
+// есть для реального контрагента по сделке; бэкенд это же и проверяет.
+function FavoriteButton({ participantId }: { participantId: string }) {
+  const [isDone, setIsDone] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
+
+  async function handleAdd() {
+    setIsBusy(true);
+    try {
+      await addFavorite(participantId);
+      setIsDone(true);
+    } catch {
+      // уже в избранном или сеть — не критично для карточки контакта
+      setIsDone(true);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return isDone ? (
+    <p className="panel__hint">★ {t("favorites.added")}</p>
+  ) : (
+    <button className="btn btn--secondary btn--sm" disabled={isBusy} onClick={() => void handleAdd()}>
+      ★ {t("favorites.add")}
+    </button>
   );
 }
 

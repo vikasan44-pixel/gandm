@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAsync } from "../../hooks/useAsync";
-import { getChatMessages, getMyChats, sendChatMessage } from "../../api/participant";
+import {
+  getChatMessages,
+  getDealDocuments,
+  getMyChats,
+  sendChatMessage,
+  uploadDealDocument,
+} from "../../api/participant";
 import { useAuth } from "../../auth/AuthContext";
 import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
@@ -189,6 +195,8 @@ function ChatWindow({ chat }: { chat: ChatView }) {
         <RatingForm ratedUserId={chat.counterpart_user_id} dealId={chat.deal_id} />
       )}
 
+      <DealDocumentsBlock dealId={chat.deal_id} />
+
       <form className="chat-form" onSubmit={handleSend}>
         <textarea
           placeholder={t("chats.inputPlaceholder")}
@@ -205,6 +213,75 @@ function ChatWindow({ chat }: { chat: ChatView }) {
           {isSending ? t("common.loading") : t("chats.send")}
         </button>
       </form>
+    </div>
+  );
+}
+
+// DealDocumentsBlock — «Документы сделки» (ТЗ §6.2): договор/подтверждение
+// прямо в чате сделки. Для чатов без завершённой сделки (например, чат
+// консолидации до выбора) бэкенд ответит 404 — блок просто не показывается.
+function DealDocumentsBlock({ dealId }: { dealId: string }) {
+  const docs = useAsync(() => getDealDocuments(dealId), [dealId]);
+  const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  // Ключ пересоздаёт input после успешной загрузки, очищая выбранный файл.
+  const [inputEpoch, setInputEpoch] = useState(0);
+
+  if (docs.error) return null;
+
+  async function handleUpload(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!file) {
+      setError(t("dealDocs.fileRequired"));
+      return;
+    }
+    setIsUploading(true);
+    try {
+      await uploadDealDocument(dealId, file);
+      setFile(null);
+      setInputEpoch((v) => v + 1);
+      docs.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  return (
+    <div className="deal-docs">
+      <div className="deal-docs__header">
+        <span className="field__label">{t("dealDocs.title")}</span>
+        <span className="deal-docs__hint">{t("dealDocs.hint")}</span>
+      </div>
+      {docs.data && docs.data.length > 0 && (
+        <ul className="deal-docs__list">
+          {docs.data.map((d) => (
+            <li key={d.id}>
+              📄 {d.original_name}{" "}
+              {d.view_url && (
+                <a href={d.view_url} target="_blank" rel="noreferrer">
+                  {t("dealDocs.view")}
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="inline-form" onSubmit={handleUpload}>
+        <input
+          key={inputEpoch}
+          type="file"
+          accept=".pdf,image/jpeg,image/png"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+        <button className="btn btn--secondary btn--sm" type="submit" disabled={isUploading}>
+          {isUploading ? t("common.loading") : t("dealDocs.upload")}
+        </button>
+      </form>
+      {error && <div className="form-error">{error}</div>}
     </div>
   );
 }

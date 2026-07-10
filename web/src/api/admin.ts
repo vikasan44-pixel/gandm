@@ -210,3 +210,20 @@ export function getModerators() {
 export function createModerator(email: string, password: string) {
   return api.post<Moderator>("/admin/moderators", { email, password });
 }
+
+// Подозрительные пары (ТЗ §6.1): повторные сделки с молчащими чатами.
+export interface SuspiciousPair {
+  client_id: string;
+  client_label: string;
+  participant_id: string;
+  participant_label: string;
+  deals_count: number;
+  silent_chats: number;
+  documented_deals: number;
+  is_favorite: boolean;
+  last_deal_created_at: string;
+}
+
+export function getSuspiciousPairs() {
+  return api.get<SuspiciousPair[]>("/admin/suspicious");
+}

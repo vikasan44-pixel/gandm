@@ -1,5 +1,10 @@
 import { useAsync } from "../hooks/useAsync";
-import { getMyReceivedRatings, getUserRating } from "../api/participant";
+import {
+  getFavorites,
+  getMyReceivedRatings,
+  getUserRating,
+  removeFavorite,
+} from "../api/participant";
 import { useAuth } from "../auth/AuthContext";
 import { LoadingState } from "../components/common/LoadingState";
 import { ErrorState } from "../components/common/ErrorState";
@@ -70,6 +75,8 @@ export function RatingPage() {
         )}
       </section>
 
+      <FavoritesSection />
+
       <section className="panel">
         <h2 className="panel__title">{t("rating.receivedTitle")}</h2>
         {received.isLoading && <LoadingState />}
@@ -90,5 +97,48 @@ export function RatingPage() {
         )}
       </section>
     </div>
+  );
+}
+
+// «Избранное» (ТЗ §6.2) — честный список постоянных партнёров.
+function FavoritesSection() {
+  const favorites = useAsync(getFavorites, []);
+
+  async function handleRemove(participantId: string) {
+    try {
+      await removeFavorite(participantId);
+      favorites.reload();
+    } catch {
+      // список перезагрузится при следующем действии — ошибку не раздуваем
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2 className="panel__title">{t("favorites.title")}</h2>
+      <p className="panel__hint">{t("favorites.hint")}</p>
+      {favorites.isLoading && <LoadingState />}
+      {favorites.data && favorites.data.length === 0 && (
+        <p className="panel__hint">{t("favorites.empty")}</p>
+      )}
+      {favorites.data && favorites.data.length > 0 && (
+        <ul className="tool-group__list">
+          {favorites.data.map((f) => (
+            <li key={f.participant_id} className="tool-row">
+              <div>
+                <div className="tool-row__name">★ {f.company_name}</div>
+                <div className="tool-row__key">{formatDateTime(f.created_at)}</div>
+              </div>
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => void handleRemove(f.participant_id)}
+              >
+                {t("favorites.remove")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

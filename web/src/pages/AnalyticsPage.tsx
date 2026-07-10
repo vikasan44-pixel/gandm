@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useAsync } from "../hooks/useAsync";
-import { getAnalytics } from "../api/admin";
+import { getAnalytics, getSuspiciousPairs } from "../api/admin";
 import { LoadingState } from "../components/common/LoadingState";
 import { ErrorState } from "../components/common/ErrorState";
+import { formatDateTime } from "../utils/date";
 import { t } from "../i18n";
 
 const PERIODS = [
@@ -103,9 +104,59 @@ export function AnalyticsPage() {
               )}
             </section>
           </div>
+
+          <SuspiciousSection />
         </>
       )}
     </div>
+  );
+}
+
+// «Подозрительная активность» (ТЗ §6.1): повторные пары с молчащими
+// чатами и без документов — сигнал администратору, не обвинение.
+function SuspiciousSection() {
+  const pairs = useAsync(getSuspiciousPairs, []);
+
+  return (
+    <section className="panel">
+      <h2 className="panel__title">{t("suspicious.title")}</h2>
+      <p className="panel__hint">{t("suspicious.hint")}</p>
+      {pairs.isLoading && <LoadingState />}
+      {pairs.error && <ErrorState message={pairs.error} onRetry={pairs.reload} />}
+      {pairs.data && pairs.data.length === 0 && (
+        <p className="panel__hint">{t("suspicious.empty")}</p>
+      )}
+      {pairs.data && pairs.data.length > 0 && (
+        <div className="table-scroll">
+          <table className="table table--compact">
+            <tbody>
+              {pairs.data.map((p, i) => (
+                <tr key={i}>
+                  <td>
+                    {p.client_label} ↔ {p.participant_label}
+                    {p.is_favorite && (
+                      <span className="pill pill--yellow" style={{ marginLeft: 6 }}>
+                        ★ {t("suspicious.favoriteMark")}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    {p.deals_count} {t("suspicious.deals")}
+                  </td>
+                  <td className={p.silent_chats > 0 ? "form-error" : ""}>
+                    {p.silent_chats} {t("suspicious.silent")}
+                  </td>
+                  <td>
+                    {p.documented_deals} {t("suspicious.documented")}
+                  </td>
+                  <td>{formatDateTime(p.last_deal_created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

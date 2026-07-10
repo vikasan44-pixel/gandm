@@ -156,6 +156,45 @@ export function deleteDispatchThreshold(routeId: string) {
   return api.del<{ status: string }>(`/routes/${routeId}/dispatch-threshold`);
 }
 
+// --- антинакрутка (ТЗ §6.2): избранное и документы сделок ---
+
+export interface FavoriteEntry {
+  participant_id: string;
+  company_name: string;
+  created_at: string;
+}
+
+export function getFavorites() {
+  return api.get<FavoriteEntry[]>("/favorites");
+}
+
+export function addFavorite(participantId: string) {
+  return api.post<{ status: string }>("/favorites", { participant_id: participantId });
+}
+
+export function removeFavorite(participantId: string) {
+  return api.del<{ status: string }>(`/favorites/${participantId}`);
+}
+
+export interface DealDocument {
+  id: string;
+  deal_id: string;
+  uploader_id: string;
+  original_name: string;
+  uploaded_at: string;
+  view_url: string;
+}
+
+export function getDealDocuments(dealId: string) {
+  return api.get<DealDocument[]>(`/deals/${dealId}/documents`);
+}
+
+export function uploadDealDocument(dealId: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  return api.postForm<DealDocument>(`/deals/${dealId}/documents`, form);
+}
+
 // --- конкурс водителей (ТЗ §11.4) ---
 
 export function createDriverCompetition(routeId: string, volumeM3: number, dispatchDate: string) {

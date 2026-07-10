@@ -458,6 +458,9 @@ export interface NotificationItem {
     cargo_request_id?: string;
     origin_label?: string;
     destination_label?: string;
+    // Уведомления конкурсов (водители, таможня) несут направление одной
+    // строкой; прочие поля payload читаются по типу уведомления.
+    direction_label?: string;
   } | null;
   is_read: boolean;
   created_at: string;

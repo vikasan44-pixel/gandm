@@ -15,6 +15,13 @@ function notificationText(n: NotificationItem): string {
     const destination = n.payload.destination_label ?? "?";
     return `${t("notifications.newCargo")}: ${origin} → ${destination}`;
   }
+  // Человеческие подписи для остальных типов; неизвестный тип показываем
+  // как есть, чтобы новый бэкенд-тип не потерялся молча.
+  const known = t(`notifTypes.${n.type}`);
+  if (known !== `notifTypes.${n.type}`) {
+    const direction = n.payload?.direction_label;
+    return direction ? `${known}: ${direction}` : known;
+  }
   return n.type;
 }
 

@@ -83,6 +83,9 @@ func main() {
 	warehouseSvc := service.NewWarehouseService(dbPool, s3Client)
 	warehouseHandler := handlers.NewWarehouseHandler(warehouseSvc)
 
+	antifraudSvc := service.NewAntifraudService(dbPool, s3Client)
+	antifraudHandler := handlers.NewAntifraudHandler(antifraudSvc)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -181,6 +184,13 @@ func main() {
 			protected.Post("/consolidated/{id}/customs-offers", cargoHandler.CreateCustomsOffer)
 			protected.Get("/consolidated/{id}/customs-offers", cargoHandler.ListCustomsOffers)
 			protected.Post("/consolidated/{id}/customs-offers/{oid}/select", cargoHandler.SelectCustomsOffer)
+			// Антинакрутка (ТЗ §6.2): избранное и документы сделок.
+			protected.Get("/favorites", antifraudHandler.ListFavorites)
+			protected.Post("/favorites", antifraudHandler.AddFavorite)
+			protected.Delete("/favorites/{id}", antifraudHandler.RemoveFavorite)
+			protected.Post("/deals/{id}/documents", antifraudHandler.UploadDealDocument)
+			protected.Get("/deals/{id}/documents", antifraudHandler.ListDealDocuments)
+
 			protected.Get("/notifications", cargoHandler.ListMyNotifications)
 			protected.Get("/notifications/unread-count", cargoHandler.CountUnreadNotifications)
 			protected.Post("/notifications/read", cargoHandler.MarkNotificationsRead)
@@ -214,6 +224,7 @@ func main() {
 					full.Use(adminHandler.RequireAdminRole)
 
 					full.Get("/analytics", adminHandler.Analytics)
+					full.Get("/suspicious", antifraudHandler.SuspiciousPairs)
 					full.Get("/moderators", adminHandler.ListModerators)
 					full.Post("/moderators", adminHandler.CreateModerator)
 
