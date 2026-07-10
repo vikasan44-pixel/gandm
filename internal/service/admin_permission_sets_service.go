@@ -19,12 +19,14 @@ type PermissionSetView struct {
 type CreatePermissionSetInput struct {
 	Name        string
 	Description string
+	PriceKZT    float64
 	ToolIDs     []uuid.UUID
 }
 
 type PermissionSetPatch struct {
 	Name        *string
 	Description *string
+	PriceKZT    *float64
 	ToolIDs     *[]uuid.UUID
 }
 
@@ -51,6 +53,9 @@ func (s *AdminService) CreatePermissionSet(ctx context.Context, adminID uuid.UUI
 	if in.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalidInput)
 	}
+	if in.PriceKZT < 0 {
+		return nil, fmt.Errorf("%w: price_kzt must be non-negative", ErrInvalidInput)
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -58,7 +63,7 @@ func (s *AdminService) CreatePermissionSet(ctx context.Context, adminID uuid.UUI
 	}
 	defer tx.Rollback(ctx)
 
-	set := &models.PermissionSet{ID: uuid.New(), Name: in.Name, Description: in.Description}
+	set := &models.PermissionSet{ID: uuid.New(), Name: in.Name, Description: in.Description, PriceKZT: in.PriceKZT}
 	setRepo := repository.NewPermissionSetRepository(tx)
 	if err := setRepo.Create(ctx, set); err != nil {
 		return nil, err
@@ -95,6 +100,12 @@ func (s *AdminService) UpdatePermissionSet(ctx context.Context, adminID, setID u
 	}
 	if patch.Description != nil {
 		set.Description = *patch.Description
+	}
+	if patch.PriceKZT != nil {
+		if *patch.PriceKZT < 0 {
+			return nil, fmt.Errorf("%w: price_kzt must be non-negative", ErrInvalidInput)
+		}
+		set.PriceKZT = *patch.PriceKZT
 	}
 	if set.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalidInput)

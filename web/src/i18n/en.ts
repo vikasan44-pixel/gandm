@@ -561,6 +561,11 @@ const en: Dictionary = {
     deactivate: "Disable",
     activate: "Enable",
     toolsCountLabel: "Tools",
+    priceLabel: "Plan price, ₸ per month (0 — free)",
+    priceInvalid: "Price must be a number of at least zero",
+    perMonth: "mo",
+    freePlan: "Free",
+    comparisonTitle: "Plan comparison",
   },
   status: {
     user: {

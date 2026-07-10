@@ -24,6 +24,7 @@ func (h *AdminHandler) ListPermissionSets(w http.ResponseWriter, r *http.Request
 type createPermissionSetRequest struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
+	PriceKZT    float64     `json:"price_kzt"`
 	ToolIDs     []uuid.UUID `json:"tool_ids"`
 }
 
@@ -43,6 +44,7 @@ func (h *AdminHandler) CreatePermissionSet(w http.ResponseWriter, r *http.Reques
 	set, err := h.svc.CreatePermissionSet(r.Context(), adminID, service.CreatePermissionSetInput{
 		Name:        req.Name,
 		Description: req.Description,
+		PriceKZT:    req.PriceKZT,
 		ToolIDs:     req.ToolIDs,
 	})
 	if err != nil {
@@ -55,6 +57,7 @@ func (h *AdminHandler) CreatePermissionSet(w http.ResponseWriter, r *http.Reques
 type updatePermissionSetRequest struct {
 	Name        *string      `json:"name"`
 	Description *string      `json:"description"`
+	PriceKZT    *float64     `json:"price_kzt"`
 	ToolIDs     *[]uuid.UUID `json:"tool_ids"`
 }
 
@@ -79,6 +82,7 @@ func (h *AdminHandler) UpdatePermissionSet(w http.ResponseWriter, r *http.Reques
 	set, err := h.svc.UpdatePermissionSet(r.Context(), adminID, id, service.PermissionSetPatch{
 		Name:        req.Name,
 		Description: req.Description,
+		PriceKZT:    req.PriceKZT,
 		ToolIDs:     req.ToolIDs,
 	})
 	if err != nil {

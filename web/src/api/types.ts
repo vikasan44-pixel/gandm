@@ -68,6 +68,8 @@ export interface PermissionSet {
   id: string;
   name: string;
   description: string;
+  // Цена тарифа, ₸/мес (ТЗ §19.5); 0 = бесплатный.
+  price_kzt: number;
   tool_ids: string[];
 }
 

@@ -146,6 +146,7 @@ export function getPermissionSets() {
 export interface CreatePermissionSetInput {
   name: string;
   description: string;
+  price_kzt: number;
   tool_ids: string[];
 }
 
@@ -156,6 +157,7 @@ export function createPermissionSet(input: CreatePermissionSetInput) {
 export interface UpdatePermissionSetInput {
   name?: string;
   description?: string;
+  price_kzt?: number;
   tool_ids?: string[];
 }
 

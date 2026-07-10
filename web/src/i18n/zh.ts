@@ -546,6 +546,11 @@ const zh: Dictionary = {
     deactivate: "停用",
     activate: "启用",
     toolsCountLabel: "工具数",
+    priceLabel: "套餐价格，₸/月（0 为免费）",
+    priceInvalid: "价格须为不小于零的数字",
+    perMonth: "月",
+    freePlan: "免费",
+    comparisonTitle: "套餐对比",
   },
   status: {
     user: {

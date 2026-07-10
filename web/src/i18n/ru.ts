@@ -559,6 +559,11 @@ const ru = {
     deactivate: "Выключить",
     activate: "Включить",
     toolsCountLabel: "Инструментов",
+    priceLabel: "Цена тарифа, ₸ в месяц (0 — бесплатный)",
+    priceInvalid: "Цена — число не меньше нуля",
+    perMonth: "мес",
+    freePlan: "Бесплатный",
+    comparisonTitle: "Сравнение тарифов",
   },
   status: {
     user: {

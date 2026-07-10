@@ -165,6 +165,7 @@ function PermissionSetsSection({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("0");
   const [toolIds, setToolIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -177,6 +178,7 @@ function PermissionSetsSection({
     setEditingId(null);
     setName("");
     setDescription("");
+    setPrice("0");
     setToolIds([]);
     setIsCreating(true);
   }
@@ -185,6 +187,7 @@ function PermissionSetsSection({
     setEditingId(set.id);
     setName(set.name);
     setDescription(set.description);
+    setPrice(String(set.price_kzt));
     setToolIds(set.tool_ids);
     setIsCreating(true);
   }
@@ -194,6 +197,11 @@ function PermissionSetsSection({
       setError(t("tools.nameRequired"));
       return;
     }
+    const priceNum = Number(price);
+    if (!Number.isFinite(priceNum) || priceNum < 0) {
+      setError(t("tools.priceInvalid"));
+      return;
+    }
     setError(null);
     setIsSaving(true);
     try {
@@ -201,10 +209,16 @@ function PermissionSetsSection({
         await updatePermissionSet(editingId, {
           name: name.trim(),
           description,
+          price_kzt: priceNum,
           tool_ids: toolIds,
         });
       } else {
-        await createPermissionSet({ name: name.trim(), description, tool_ids: toolIds });
+        await createPermissionSet({
+          name: name.trim(),
+          description,
+          price_kzt: priceNum,
+          tool_ids: toolIds,
+        });
       }
       setIsCreating(false);
       setEditingId(null);
@@ -236,6 +250,16 @@ function PermissionSetsSection({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
+          <label className="field">
+            <span className="field__label">{t("tools.priceLabel")}</span>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </label>
           <div className="tool-checklist">
             {(tools.data ?? []).map((tool) => (
               <label key={tool.id} className="tool-checklist__item">
@@ -262,7 +286,14 @@ function PermissionSetsSection({
       <ul className="set-list">
         {(sets.data ?? []).map((set) => (
           <li key={set.id} className="set-row" onClick={() => startEdit(set)}>
-            <div className="set-row__name">{set.name}</div>
+            <div className="set-row__name">
+              {set.name}
+              <span className="pill pill--green" style={{ marginLeft: 8 }}>
+                {set.price_kzt > 0
+                  ? `${set.price_kzt.toLocaleString("ru-RU")} ₸/${t("tools.perMonth")}`
+                  : t("tools.freePlan")}
+              </span>
+            </div>
             {set.description && <div className="set-row__description">{set.description}</div>}
             <div className="set-row__count">
               {t("tools.toolsCountLabel")}: {set.tool_ids.length}
@@ -270,6 +301,53 @@ function PermissionSetsSection({
           </li>
         ))}
       </ul>
+
+      {tools.data && sets.data && sets.data.length > 0 && (
+        <ComparisonTable tools={tools.data} sets={sets.data} />
+      )}
     </section>
+  );
+}
+
+// Таблица сравнения тарифов (ТЗ §19.5): какие инструменты входят в каждый
+// набор — галочки и прочерки.
+function ComparisonTable({ tools, sets }: { tools: Tool[]; sets: PermissionSet[] }) {
+  return (
+    <>
+      <h3 className="detail-panel__subtitle" style={{ marginTop: 16 }}>
+        {t("tools.comparisonTitle")}
+      </h3>
+      <div className="table-scroll">
+        <table className="table table--compact">
+          <thead>
+            <tr>
+              <th>{t("tools.toolsTitle")}</th>
+              {sets.map((s) => (
+                <th key={s.id}>
+                  {s.name}
+                  <div className="tool-row__key">
+                    {s.price_kzt > 0
+                      ? `${s.price_kzt.toLocaleString("ru-RU")} ₸/${t("tools.perMonth")}`
+                      : t("tools.freePlan")}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {tools.map((tool) => (
+              <tr key={tool.id}>
+                <td>{tool.name}</td>
+                {sets.map((s) => (
+                  <td key={s.id} style={{ textAlign: "center" }}>
+                    {s.tool_ids.includes(tool.id) ? "✓" : "—"}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

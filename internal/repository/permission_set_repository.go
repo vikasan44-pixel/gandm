@@ -19,11 +19,11 @@ func NewPermissionSetRepository(db Querier) *PermissionSetRepository {
 	return &PermissionSetRepository{db: db}
 }
 
-const permissionSetColumns = `id, name, description`
+const permissionSetColumns = `id, name, description, price_kzt`
 
 func scanPermissionSet(row pgx.Row) (*models.PermissionSet, error) {
 	var s models.PermissionSet
-	err := row.Scan(&s.ID, &s.Name, &s.Description)
+	err := row.Scan(&s.ID, &s.Name, &s.Description, &s.PriceKZT)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -34,8 +34,8 @@ func scanPermissionSet(row pgx.Row) (*models.PermissionSet, error) {
 }
 
 func (r *PermissionSetRepository) Create(ctx context.Context, s *models.PermissionSet) error {
-	const q = `INSERT INTO permission_sets (id, name, description) VALUES ($1, $2, $3)`
-	_, err := r.db.Exec(ctx, q, s.ID, s.Name, s.Description)
+	const q = `INSERT INTO permission_sets (id, name, description, price_kzt) VALUES ($1, $2, $3, $4)`
+	_, err := r.db.Exec(ctx, q, s.ID, s.Name, s.Description, s.PriceKZT)
 	return err
 }
 
@@ -52,8 +52,8 @@ func (r *PermissionSetRepository) GetByName(ctx context.Context, name string) (*
 }
 
 func (r *PermissionSetRepository) Update(ctx context.Context, s *models.PermissionSet) error {
-	const q = `UPDATE permission_sets SET name = $2, description = $3 WHERE id = $1`
-	tag, err := r.db.Exec(ctx, q, s.ID, s.Name, s.Description)
+	const q = `UPDATE permission_sets SET name = $2, description = $3, price_kzt = $4 WHERE id = $1`
+	tag, err := r.db.Exec(ctx, q, s.ID, s.Name, s.Description, s.PriceKZT)
 	if err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func (r *PermissionSetRepository) List(ctx context.Context) ([]models.Permission
 	sets := make([]models.PermissionSet, 0)
 	for rows.Next() {
 		var s models.PermissionSet
-		if err := rows.Scan(&s.ID, &s.Name, &s.Description); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.PriceKZT); err != nil {
 			return nil, err
 		}
 		sets = append(sets, s)
