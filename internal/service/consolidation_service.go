@@ -60,7 +60,7 @@ func (s *CargoService) suggestConsolidations(ctx context.Context) error {
 	}
 
 	maxVolume, maxWeight := s.getCapacityLimits(ctx)
-	pairs, err := s.matcher.Match(ctx, candidates, matchingParams(maxVolume, maxWeight, s.cfg))
+	groups, err := s.matcher.Match(ctx, candidates, matchingParams(maxVolume, maxWeight, s.cfg))
 	if err != nil {
 		return err
 	}
@@ -70,18 +70,36 @@ func (s *CargoService) suggestConsolidations(ctx context.Context) error {
 		byID[c.ID] = c
 	}
 
-	for _, pair := range pairs {
-		cargoA, okA := byID[pair.A]
-		cargoB, okB := byID[pair.B]
-		if !okA || !okB {
-			continue // matcher returned an id outside the pool we sent
+	for _, group := range groups {
+		cargos := make([]models.CargoRequest, 0, len(group))
+		known := true
+		for _, id := range group {
+			cargo, ok := byID[id]
+			if !ok {
+				known = false // matcher returned an id outside the pool we sent
+				break
+			}
+			cargos = append(cargos, cargo)
+		}
+		if !known || len(cargos) < 2 {
+			continue
 		}
 
-		// A pair that was already suggested once (including declined —
-		// "each goes alone" must stick) is never re-suggested.
-		alreadySuggested, err := consRepo.ExistsSuggestionForPair(ctx, cargoA.ID, cargoB.ID)
-		if err != nil {
-			return err
+		// Два груза, однажды состоявшие в одном предложении (включая
+		// отклонённое — «каждый едет сам» должно держаться), вместе не
+		// предлагаются снова. Проверяем все пары группы.
+		alreadySuggested := false
+		for i := 0; i < len(cargos) && !alreadySuggested; i++ {
+			for j := i + 1; j < len(cargos); j++ {
+				exists, err := consRepo.ExistsSuggestionForPair(ctx, cargos[i].ID, cargos[j].ID)
+				if err != nil {
+					return err
+				}
+				if exists {
+					alreadySuggested = true
+					break
+				}
+			}
 		}
 		if alreadySuggested {
 			continue
@@ -89,17 +107,25 @@ func (s *CargoService) suggestConsolidations(ctx context.Context) error {
 
 		suggestion := &models.ConsolidationSuggestion{
 			ID:             uuid.New(),
-			CargoRequestA:  cargoA.ID,
-			CargoRequestB:  cargoB.ID,
-			DirectionLabel: cargoA.Origin.Label + " → " + cargoA.Destination.Label,
+			DirectionLabel: cargos[0].Origin.Label + " → " + cargos[0].Destination.Label,
 			Status:         models.ConsolidationSuggested,
 			CreatedAt:      time.Now(),
 		}
 		if err := consRepo.CreateSuggestion(ctx, suggestion); err != nil {
 			return err
 		}
+		for _, cargo := range cargos {
+			if err := consRepo.AddSuggestionMember(ctx, &models.SuggestionMember{
+				SuggestionID:   suggestion.ID,
+				CargoRequestID: cargo.ID,
+				ClientID:       cargo.ClientID,
+				Response:       models.SuggestionPending,
+			}); err != nil {
+				return err
+			}
+		}
 
-		for _, cargo := range []models.CargoRequest{cargoA, cargoB} {
+		for _, cargo := range cargos {
 			if err := s.notifyConsolidation(ctx, cargo.ClientID, "consolidation_suggested", suggestion, cargo.ID); err != nil {
 				log.Printf("consolidation %s: notify client %s: %v", suggestion.ID, cargo.ClientID, err)
 			}
@@ -134,14 +160,18 @@ func (s *CargoService) notifyConsolidation(ctx context.Context, clientID uuid.UU
 // for the other client" from "your response is needed" without exposing
 // which side (a/b) the caller is.
 type ConsolidationView struct {
-	SuggestionID    uuid.UUID                  `json:"suggestion_id"`
-	Status          models.ConsolidationStatus `json:"status"`
-	DirectionLabel  string                     `json:"direction_label"`
-	OtherVolumeM3   float64                    `json:"other_volume_m3"`
-	OtherWeightKg   float64                    `json:"other_weight_kg"`
-	MySideAgreed    bool                       `json:"my_side_agreed"`
-	OtherSideAgreed bool                       `json:"other_side_agreed"`
-	CreatedAt       time.Time                  `json:"created_at"`
+	SuggestionID   uuid.UUID                  `json:"suggestion_id"`
+	Status         models.ConsolidationStatus `json:"status"`
+	DirectionLabel string                     `json:"direction_label"`
+	// Группа (ТЗ §4.2 «два клиента и более»): сколько заявок в предложении
+	// и сколько уже согласилось. Other* — суммарный размер ЧУЖИХ грузов.
+	MembersCount    int       `json:"members_count"`
+	AgreedCount     int       `json:"agreed_count"`
+	OtherVolumeM3   float64   `json:"other_volume_m3"`
+	OtherWeightKg   float64   `json:"other_weight_kg"`
+	MySideAgreed    bool      `json:"my_side_agreed"`
+	OtherSideAgreed bool      `json:"other_side_agreed"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // GetActiveConsolidation returns the pending suggestion for the client's
@@ -168,58 +198,119 @@ func (s *CargoService) GetActiveConsolidation(ctx context.Context, clientID, car
 		return nil, err
 	}
 
-	isSideA := suggestion.CargoRequestA == cargoID
-	otherID := suggestion.CargoRequestB
-	if !isSideA {
-		otherID = suggestion.CargoRequestA
-	}
-	other, err := cargoRepo.GetByID(ctx, otherID)
+	members, err := consRepo.ListSuggestionMembers(ctx, suggestion.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	return &ConsolidationView{
-		SuggestionID:    suggestion.ID,
-		Status:          suggestion.Status,
-		DirectionLabel:  suggestion.DirectionLabel,
-		OtherVolumeM3:   other.VolumeM3,
-		OtherWeightKg:   other.WeightKg,
-		MySideAgreed:    (isSideA && suggestion.Status == models.ConsolidationAAgreed) || (!isSideA && suggestion.Status == models.ConsolidationBAgreed),
-		OtherSideAgreed: (isSideA && suggestion.Status == models.ConsolidationBAgreed) || (!isSideA && suggestion.Status == models.ConsolidationAAgreed),
-		CreatedAt:       suggestion.CreatedAt,
-	}, nil
+	view := &ConsolidationView{
+		SuggestionID:   suggestion.ID,
+		Status:         suggestion.Status,
+		DirectionLabel: suggestion.DirectionLabel,
+		MembersCount:   len(members),
+		CreatedAt:      suggestion.CreatedAt,
+	}
+	for _, m := range members {
+		if m.Response == models.SuggestionAgreed {
+			view.AgreedCount++
+		}
+		if m.CargoRequestID == cargoID {
+			view.MySideAgreed = m.Response == models.SuggestionAgreed
+			continue
+		}
+		// Суммарный размер ОСТАЛЬНЫХ грузов группы — без идентичности.
+		other, err := cargoRepo.GetByID(ctx, m.CargoRequestID)
+		if err != nil {
+			return nil, err
+		}
+		view.OtherVolumeM3 += other.VolumeM3
+		view.OtherWeightKg += other.WeightKg
+		if m.Response == models.SuggestionAgreed {
+			view.OtherSideAgreed = true
+		}
+	}
+	return view, nil
 }
 
-// respondConsolidation validates that the caller owns the given cargo and
-// that the cargo belongs to the suggestion, then returns the suggestion and
-// whether the caller is side A.
-func (s *CargoService) respondConsolidation(ctx context.Context, q repository.Querier, clientID, cargoID, suggestionID uuid.UUID) (*models.ConsolidationSuggestion, bool, error) {
+// respondConsolidation validates that the caller owns the given cargo, the
+// cargo is a member of the suggestion and the suggestion is still pending.
+// Returns the suggestion and the caller's member row.
+func (s *CargoService) respondConsolidation(ctx context.Context, q repository.Querier, clientID, cargoID, suggestionID uuid.UUID) (*models.ConsolidationSuggestion, []models.SuggestionMember, *models.SuggestionMember, error) {
 	cargoRepo := repository.NewCargoRequestRepository(q)
 	cargo, err := cargoRepo.GetByID(ctx, cargoID)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, nil, err
 	}
 	if cargo.ClientID != clientID {
-		return nil, false, ErrForbiddenNotOwner
+		return nil, nil, nil, ErrForbiddenNotOwner
 	}
 
 	consRepo := repository.NewConsolidationRepository(q)
 	suggestion, err := consRepo.GetSuggestionByID(ctx, suggestionID)
 	if err != nil {
-		return nil, false, err
-	}
-	if suggestion.CargoRequestA != cargoID && suggestion.CargoRequestB != cargoID {
-		return nil, false, fmt.Errorf("%w: suggestion does not involve this cargo request", ErrInvalidInput)
+		return nil, nil, nil, err
 	}
 	if suggestion.Status == models.ConsolidationDeclined || suggestion.Status == models.ConsolidationBothAgreed {
-		return nil, false, ErrAlreadyResponded
+		return nil, nil, nil, ErrAlreadyResponded
 	}
-	return suggestion, suggestion.CargoRequestA == cargoID, nil
+
+	members, err := consRepo.ListSuggestionMembers(ctx, suggestionID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var mine *models.SuggestionMember
+	for i := range members {
+		if members[i].CargoRequestID == cargoID {
+			mine = &members[i]
+			break
+		}
+	}
+	if mine == nil {
+		return nil, nil, nil, fmt.Errorf("%w: suggestion does not involve this cargo request", ErrInvalidInput)
+	}
+	return suggestion, members, mine, nil
 }
 
-// AgreeConsolidation records the client's agreement; when both sides have
-// agreed it creates the consolidated request, closes the member requests
-// and notifies both clients — all in one transaction.
+// resolveSuggestionIfReady закрывает групповое предложение, когда ответы
+// собраны: согласившиеся (двое и больше) объединяются, отказавшиеся и
+// «не набравшие пару» продолжают свои конкурсы. Предложение живёт, пока
+// остаются pending-ответы И группа ещё может собраться (согласные +
+// неответившие ≥ 2).
+func (s *CargoService) resolveSuggestionIfReady(ctx context.Context, tx repository.Querier, suggestion *models.ConsolidationSuggestion, members []models.SuggestionMember) error {
+	pending, agreed := 0, 0
+	for _, m := range members {
+		switch m.Response {
+		case models.SuggestionPending:
+			pending++
+		case models.SuggestionAgreed:
+			agreed++
+		}
+	}
+	if pending > 0 && agreed+pending >= 2 {
+		return nil // ждём остальных
+	}
+
+	consRepo := repository.NewConsolidationRepository(tx)
+	if agreed >= 2 {
+		agreedMembers := make([]models.SuggestionMember, 0, agreed)
+		for _, m := range members {
+			if m.Response == models.SuggestionAgreed {
+				agreedMembers = append(agreedMembers, m)
+			}
+		}
+		if err := s.createConsolidatedFromMembers(ctx, tx, suggestion, agreedMembers); err != nil {
+			return err
+		}
+		suggestion.Status = models.ConsolidationBothAgreed
+	} else {
+		suggestion.Status = models.ConsolidationDeclined
+	}
+	return consRepo.UpdateSuggestionStatus(ctx, suggestion.ID, suggestion.Status)
+}
+
+// AgreeConsolidation records the client's agreement; когда все участники
+// ответили, согласившиеся (≥2) объединяются в одну консолидацию — в одной
+// транзакции.
 func (s *CargoService) AgreeConsolidation(ctx context.Context, clientID, cargoID, suggestionID uuid.UUID) (*models.ConsolidationSuggestion, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -227,35 +318,26 @@ func (s *CargoService) AgreeConsolidation(ctx context.Context, clientID, cargoID
 	}
 	defer tx.Rollback(ctx)
 
-	suggestion, isSideA, err := s.respondConsolidation(ctx, tx, clientID, cargoID, suggestionID)
+	suggestion, members, mine, err := s.respondConsolidation(ctx, tx, clientID, cargoID, suggestionID)
 	if err != nil {
 		return nil, err
 	}
-
-	var newStatus models.ConsolidationStatus
-	switch {
-	case suggestion.Status == models.ConsolidationSuggested && isSideA:
-		newStatus = models.ConsolidationAAgreed
-	case suggestion.Status == models.ConsolidationSuggested && !isSideA:
-		newStatus = models.ConsolidationBAgreed
-	case suggestion.Status == models.ConsolidationAAgreed && !isSideA,
-		suggestion.Status == models.ConsolidationBAgreed && isSideA:
-		newStatus = models.ConsolidationBothAgreed
-	default:
-		// The same side agreeing twice is a no-op.
+	if mine.Response == models.SuggestionAgreed {
+		// Повторное согласие той же стороны — no-op.
 		return suggestion, tx.Commit(ctx)
+	}
+	if mine.Response == models.SuggestionDeclined {
+		return nil, ErrAlreadyResponded
 	}
 
 	consRepo := repository.NewConsolidationRepository(tx)
-	if err := consRepo.UpdateSuggestionStatus(ctx, suggestionID, newStatus); err != nil {
+	if err := consRepo.SetSuggestionMemberResponse(ctx, suggestionID, cargoID, models.SuggestionAgreed); err != nil {
 		return nil, err
 	}
-	suggestion.Status = newStatus
+	mine.Response = models.SuggestionAgreed
 
-	if newStatus == models.ConsolidationBothAgreed {
-		if err := s.createConsolidatedFromSuggestion(ctx, tx, suggestion); err != nil {
-			return nil, err
-		}
+	if err := s.resolveSuggestionIfReady(ctx, tx, suggestion, members); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -264,28 +346,33 @@ func (s *CargoService) AgreeConsolidation(ctx context.Context, clientID, cargoID
 	return suggestion, nil
 }
 
-// createConsolidatedFromSuggestion merges the two member requests: sums
-// volume/weight, takes points from cargo A (both are within the matching
-// radius by construction), closes the members and opens the shared
-// competition.
-func (s *CargoService) createConsolidatedFromSuggestion(ctx context.Context, tx repository.Querier, suggestion *models.ConsolidationSuggestion) error {
+// createConsolidatedFromMembers merges the agreed member requests: sums
+// volume/weight, takes points from the first cargo (все в радиусе якоря по
+// построению), closes the members and opens the shared competition.
+func (s *CargoService) createConsolidatedFromMembers(ctx context.Context, tx repository.Querier, suggestion *models.ConsolidationSuggestion, agreed []models.SuggestionMember) error {
 	cargoRepo := repository.NewCargoRequestRepository(tx)
-	cargoA, err := cargoRepo.GetByID(ctx, suggestion.CargoRequestA)
-	if err != nil {
-		return err
-	}
-	cargoB, err := cargoRepo.GetByID(ctx, suggestion.CargoRequestB)
-	if err != nil {
-		return err
+
+	cargos := make([]*models.CargoRequest, 0, len(agreed))
+	memberIDs := make([]uuid.UUID, 0, len(agreed))
+	totalVolume, totalWeight := 0.0, 0.0
+	for _, m := range agreed {
+		cargo, err := cargoRepo.GetByID(ctx, m.CargoRequestID)
+		if err != nil {
+			return err
+		}
+		cargos = append(cargos, cargo)
+		memberIDs = append(memberIDs, cargo.ID)
+		totalVolume += cargo.VolumeM3
+		totalWeight += cargo.WeightKg
 	}
 
 	consolidated := &models.ConsolidatedRequest{
 		ID:               uuid.New(),
-		Origin:           cargoA.Origin,
-		Destination:      cargoA.Destination,
-		TotalVolumeM3:    cargoA.VolumeM3 + cargoB.VolumeM3,
-		TotalWeightKg:    cargoA.WeightKg + cargoB.WeightKg,
-		MemberRequestIDs: []uuid.UUID{cargoA.ID, cargoB.ID},
+		Origin:           cargos[0].Origin,
+		Destination:      cargos[0].Destination,
+		TotalVolumeM3:    totalVolume,
+		TotalWeightKg:    totalWeight,
+		MemberRequestIDs: memberIDs,
 		Status:           models.CargoRequestOpen,
 		CreatedAt:        time.Now(),
 	}
@@ -295,15 +382,12 @@ func (s *CargoService) createConsolidatedFromSuggestion(ctx context.Context, tx 
 		return err
 	}
 
-	// Member requests leave the individual competition.
-	if err := cargoRepo.UpdateStatus(ctx, cargoA.ID, models.CargoRequestClosed); err != nil {
-		return err
-	}
-	if err := cargoRepo.UpdateStatus(ctx, cargoB.ID, models.CargoRequestClosed); err != nil {
-		return err
-	}
-
-	for _, cargo := range []*models.CargoRequest{cargoA, cargoB} {
+	notifRepo := repository.NewNotificationRepository(tx)
+	for _, cargo := range cargos {
+		// Member requests leave the individual competition.
+		if err := cargoRepo.UpdateStatus(ctx, cargo.ID, models.CargoRequestClosed); err != nil {
+			return err
+		}
 		payload, err := json.Marshal(map[string]any{
 			"consolidated_request_id": consolidated.ID,
 			"cargo_request_id":        cargo.ID,
@@ -312,7 +396,6 @@ func (s *CargoService) createConsolidatedFromSuggestion(ctx context.Context, tx 
 		if err != nil {
 			return err
 		}
-		notifRepo := repository.NewNotificationRepository(tx)
 		if err := notifRepo.Create(ctx, &models.Notification{
 			ID:        uuid.New(),
 			UserID:    cargo.ClientID,
@@ -327,8 +410,10 @@ func (s *CargoService) createConsolidatedFromSuggestion(ctx context.Context, tx 
 	return nil
 }
 
-// DeclineConsolidation: one "no" ends the suggestion for both sides — each
-// cargo request simply stays in its own competition.
+// DeclineConsolidation: отказавшийся выходит из группы; остальные ждут
+// решения друг друга. Если после отказа группа уже не может собраться
+// (согласные + неответившие < 2) — предложение закрывается, каждый
+// продолжает свой конкурс.
 func (s *CargoService) DeclineConsolidation(ctx context.Context, clientID, cargoID, suggestionID uuid.UUID) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -336,12 +421,21 @@ func (s *CargoService) DeclineConsolidation(ctx context.Context, clientID, cargo
 	}
 	defer tx.Rollback(ctx)
 
-	if _, _, err := s.respondConsolidation(ctx, tx, clientID, cargoID, suggestionID); err != nil {
+	suggestion, members, mine, err := s.respondConsolidation(ctx, tx, clientID, cargoID, suggestionID)
+	if err != nil {
 		return err
+	}
+	if mine.Response == models.SuggestionDeclined {
+		return tx.Commit(ctx) // повторный отказ — no-op
 	}
 
 	consRepo := repository.NewConsolidationRepository(tx)
-	if err := consRepo.UpdateSuggestionStatus(ctx, suggestionID, models.ConsolidationDeclined); err != nil {
+	if err := consRepo.SetSuggestionMemberResponse(ctx, suggestionID, cargoID, models.SuggestionDeclined); err != nil {
+		return err
+	}
+	mine.Response = models.SuggestionDeclined
+
+	if err := s.resolveSuggestionIfReady(ctx, tx, suggestion, members); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

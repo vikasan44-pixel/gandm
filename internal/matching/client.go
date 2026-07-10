@@ -64,18 +64,8 @@ type matchRequest struct {
 	Radii    radiiDTO   `json:"radii"`
 }
 
-type pairDTO struct {
-	A string `json:"a"`
-	B string `json:"b"`
-}
-
 type matchResponse struct {
-	Pairs []pairDTO `json:"pairs"`
-}
-
-type Pair struct {
-	A uuid.UUID
-	B uuid.UUID
+	Groups [][]string `json:"groups"`
 }
 
 type MatchParams struct {
@@ -90,10 +80,11 @@ func toPointDTO(p models.GeoPoint) pointDTO {
 }
 
 // Match sends the candidate pool to the Python service and returns the
-// suggested pairs. Any transport or decode failure is returned as-is — the
-// caller decides whether matching is critical (it isn't: cargo submission
-// must not fail because the matcher is down).
-func (c *Client) Match(ctx context.Context, candidates []models.CargoRequest, params MatchParams) ([]Pair, error) {
+// suggested consolidation GROUPS (каждая группа — id заявок, вместе
+// влезающих в лимит; минимум две). Any transport or decode failure is
+// returned as-is — the caller decides whether matching is critical (it
+// isn't: cargo submission must not fail because the matcher is down).
+func (c *Client) Match(ctx context.Context, candidates []models.CargoRequest, params MatchParams) ([][]uuid.UUID, error) {
 	reqBody := matchRequest{
 		Requests: make([]cargoDTO, 0, len(candidates)),
 		Limits:   limitsDTO{MaxVolumeM3: params.MaxVolumeM3, MaxWeightKg: params.MaxWeightKg},
@@ -139,17 +130,19 @@ func (c *Client) Match(ctx context.Context, candidates []models.CargoRequest, pa
 		return nil, err
 	}
 
-	pairs := make([]Pair, 0, len(decoded.Pairs))
-	for _, p := range decoded.Pairs {
-		a, err := uuid.Parse(p.A)
-		if err != nil {
-			return nil, fmt.Errorf("matching service returned invalid id %q", p.A)
+	groups := make([][]uuid.UUID, 0, len(decoded.Groups))
+	for _, raw := range decoded.Groups {
+		group := make([]uuid.UUID, 0, len(raw))
+		for _, idStr := range raw {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				return nil, fmt.Errorf("matching service returned invalid id %q", idStr)
+			}
+			group = append(group, id)
 		}
-		b, err := uuid.Parse(p.B)
-		if err != nil {
-			return nil, fmt.Errorf("matching service returned invalid id %q", p.B)
+		if len(group) >= 2 {
+			groups = append(groups, group)
 		}
-		pairs = append(pairs, Pair{A: a, B: b})
 	}
-	return pairs, nil
+	return groups, nil
 }

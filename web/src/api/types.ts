@@ -390,6 +390,9 @@ export interface ConsolidationView {
   suggestion_id: string;
   status: ConsolidationStatus;
   direction_label: string;
+  // Группа (ТЗ §4.2 «два клиента и более»): участников всего / согласилось.
+  members_count: number;
+  agreed_count: number;
   other_volume_m3: number;
   other_weight_kg: number;
   my_side_agreed: boolean;
@@ -427,7 +430,10 @@ export interface ConsolidatedStatusView {
   am_initiator: boolean;
   am_invited: boolean;
   payment_done: boolean;
+  members_count: number;
+  accepted_count: number;
   counterpart?: ClientContact | null;
+  counterparts?: ClientContact[] | null;
   my_offer_id?: string | null;
   other_has_chosen: boolean;
   selection_state: SelectionState;

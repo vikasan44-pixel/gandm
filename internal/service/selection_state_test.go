@@ -8,26 +8,51 @@ import (
 	"gandm/internal/models"
 )
 
-func TestSelectionState(t *testing.T) {
-	s := &CargoService{}
+func TestGroupSelectionState(t *testing.T) {
 	offerA := uuid.New()
 	offerB := uuid.New()
+	offerC := uuid.New()
+	c1, c2, c3, c4, c5 := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	sel := func(client, offer uuid.UUID) models.ConsolidatedSelection {
+		return models.ConsolidatedSelection{ClientID: client, OfferID: offer}
+	}
 
 	tests := []struct {
-		name        string
-		mine, other *uuid.UUID
-		want        string
+		name       string
+		selections []models.ConsolidatedSelection
+		accepted   []uuid.UUID
+		wantState  string
+		wantOffer  *uuid.UUID
 	}{
-		{"nobody chose", nil, nil, "none"},
-		{"only mine", &offerA, nil, "waiting_other"},
-		{"only other", nil, &offerA, "waiting_other"},
-		{"same offer", &offerA, &offerA, "matched"},
-		{"different offers", &offerA, &offerB, "mismatch"},
+		{"nobody chose", nil, []uuid.UUID{c1, c2}, "none", nil},
+		{"pair: only one chose", []models.ConsolidatedSelection{sel(c1, offerA)}, []uuid.UUID{c1, c2}, "waiting_other", nil},
+		{"pair: both same offer", []models.ConsolidatedSelection{sel(c1, offerA), sel(c2, offerA)}, []uuid.UUID{c1, c2}, "matched", &offerA},
+		{"pair: different offers", []models.ConsolidatedSelection{sel(c1, offerA), sel(c2, offerB)}, []uuid.UUID{c1, c2}, "mismatch", nil},
+		{"group of 5: majority of 3 closes the deal",
+			[]models.ConsolidatedSelection{sel(c1, offerA), sel(c2, offerA), sel(c3, offerA), sel(c4, offerB)},
+			[]uuid.UUID{c1, c2, c3, c4, c5}, "matched", &offerA},
+		{"group of 5: 2-2-1 split, all voted — mismatch",
+			[]models.ConsolidatedSelection{sel(c1, offerA), sel(c2, offerA), sel(c3, offerB), sel(c4, offerB), sel(c5, offerC)},
+			[]uuid.UUID{c1, c2, c3, c4, c5}, "mismatch", nil},
+		{"group of 3: 2 voted same, one silent — majority already",
+			[]models.ConsolidatedSelection{sel(c1, offerA), sel(c2, offerA)},
+			[]uuid.UUID{c1, c2, c3}, "matched", &offerA},
+		{"non-accepted member's vote is ignored",
+			[]models.ConsolidatedSelection{sel(c1, offerA), sel(c3, offerA)},
+			[]uuid.UUID{c1, c2}, "waiting_other", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := s.selectionState(tt.mine, tt.other); got != tt.want {
-				t.Errorf("selectionState() = %q, want %q", got, tt.want)
+			state, offer := groupSelectionState(tt.selections, tt.accepted)
+			if state != tt.wantState {
+				t.Errorf("state = %q, want %q", state, tt.wantState)
+			}
+			switch {
+			case tt.wantOffer == nil && offer != nil:
+				t.Errorf("offer = %v, want nil", *offer)
+			case tt.wantOffer != nil && (offer == nil || *offer != *tt.wantOffer):
+				t.Errorf("offer = %v, want %v", offer, *tt.wantOffer)
 			}
 		})
 	}

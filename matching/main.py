@@ -71,13 +71,11 @@ class MatchRequest(BaseModel):
     radii: Radii
 
 
-class Pair(BaseModel):
-    a: str
-    b: str
-
-
 class MatchResponse(BaseModel):
-    pairs: list[Pair]
+    # Группы консолидации (ТЗ §4.2 «два клиента и более»): каждая группа —
+    # список id заявок, вместе укладывающихся в лимит. Пара — частный
+    # случай группы из двух.
+    groups: list[list[str]]
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -104,16 +102,20 @@ def points_match(p1: Point, p2: Point, radii: Radii) -> bool:
     return haversine_km(p1.lat, p1.lng, p2.lat, p2.lng) <= threshold
 
 
-def can_pair(a: CargoItem, b: CargoItem, limits: Limits, radii: Radii) -> bool:
-    if a.client_id == b.client_id:
+def fits_group(seed: CargoItem, b: CargoItem, vol: float, wt: float,
+               clients: set[str], limits: Limits, radii: Radii) -> bool:
+    """Кандидат подходит в группу: другой клиент, направление совпадает с
+    якорем группы (первой заявкой) по радиусной логике, суммарные объём и
+    вес не превышают лимит."""
+    if b.client_id in clients:
         return False
-    if a.volume_m3 + b.volume_m3 > limits.max_volume_m3:
+    if vol + b.volume_m3 > limits.max_volume_m3:
         return False
-    if a.weight_kg + b.weight_kg > limits.max_weight_kg:
+    if wt + b.weight_kg > limits.max_weight_kg:
         return False
-    if not points_match(a.origin, b.origin, radii):
+    if not points_match(seed.origin, b.origin, radii):
         return False
-    if not points_match(a.destination, b.destination, radii):
+    if not points_match(seed.destination, b.destination, radii):
         return False
     return True
 
@@ -125,23 +127,32 @@ def health() -> dict[str, str]:
 
 @app.post("/match")
 def match(req: MatchRequest) -> MatchResponse:
-    """Greedy pairing: each request ends up in at most one pair, so the Go
-    side never has to resolve conflicting suggestions. O(n²) is fine at MVP
-    scale."""
-    pairs: list[Pair] = []
+    """Greedy grouping: первая свободная заявка становится якорем группы,
+    к ней добираются совместимые заявки, пока влезают в лимит. Каждая
+    заявка попадает максимум в одну группу — Go-стороне не приходится
+    разруливать конфликтующие предложения. O(n²) приемлем на MVP-объёмах
+    (порог пересмотра — ~тысяча одновременно открытых заявок)."""
+    groups: list[list[str]] = []
     used: set[str] = set()
 
     items = req.requests
-    for i, a in enumerate(items):
-        if a.id in used:
+    for i, seed in enumerate(items):
+        if seed.id in used:
             continue
+        group = [seed]
+        clients = {seed.client_id}
+        vol, wt = seed.volume_m3, seed.weight_kg
         for b in items[i + 1 :]:
             if b.id in used:
                 continue
-            if can_pair(a, b, req.limits, req.radii):
-                pairs.append(Pair(a=a.id, b=b.id))
-                used.add(a.id)
-                used.add(b.id)
-                break
+            if fits_group(seed, b, vol, wt, clients, req.limits, req.radii):
+                group.append(b)
+                clients.add(b.client_id)
+                vol += b.volume_m3
+                wt += b.weight_kg
+        if len(group) >= 2:
+            for item in group:
+                used.add(item.id)
+            groups.append([item.id for item in group])
 
-    return MatchResponse(pairs=pairs)
+    return MatchResponse(groups=groups)

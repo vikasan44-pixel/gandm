@@ -35,23 +35,9 @@ func (s *CargoService) getConsolidatedForMember(ctx context.Context, q repositor
 	return consRepo.GetConsolidatedByID(ctx, consolidatedID)
 }
 
-// otherMemberClient resolves the second client of the consolidation.
-func (s *CargoService) otherMemberClient(ctx context.Context, q repository.Querier, consolidatedID, clientID uuid.UUID) (uuid.UUID, error) {
-	consRepo := repository.NewConsolidationRepository(q)
-	clients, err := consRepo.ListMemberClients(ctx, consolidatedID)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	for _, id := range clients {
-		if id != clientID {
-			return id, nil
-		}
-	}
-	return uuid.Nil, fmt.Errorf("consolidation %s has no second client", consolidatedID)
-}
-
-// InviteConsolidated: the subscribed initiator opens the paid flow and the
-// other client gets a "с вами хотят объединиться" notification.
+// InviteConsolidated: участник с подпиской открывает платный флоу — ВСЕ
+// остальные клиенты группы получают приглашение (ТЗ §4.2 «два клиента и
+// более»). Инициатор считается принявшим сразу.
 func (s *CargoService) InviteConsolidated(ctx context.Context, clientID, consolidatedID uuid.UUID) error {
 	client, err := s.requireEligibleUser(ctx, clientID)
 	if err != nil {
@@ -69,16 +55,18 @@ func (s *CargoService) InviteConsolidated(ctx context.Context, clientID, consoli
 		return ErrInviteWrongState
 	}
 
-	invitedID, err := s.otherMemberClient(ctx, s.db, consolidatedID, clientID)
+	consRepo := repository.NewConsolidationRepository(s.db)
+	if err := consRepo.SetInvite(ctx, consolidatedID, clientID); err != nil {
+		return err
+	}
+	if err := consRepo.AddAcceptance(ctx, consolidatedID, clientID); err != nil {
+		return err
+	}
+
+	clients, err := consRepo.ListMemberClients(ctx, consolidatedID)
 	if err != nil {
 		return err
 	}
-
-	consRepo := repository.NewConsolidationRepository(s.db)
-	if err := consRepo.SetInvite(ctx, consolidatedID, clientID, invitedID); err != nil {
-		return err
-	}
-
 	payload, err := json.Marshal(map[string]any{
 		"consolidated_request_id": consolidatedID,
 		"direction_label":         cons.Origin.Label + " → " + cons.Destination.Label,
@@ -87,18 +75,26 @@ func (s *CargoService) InviteConsolidated(ctx context.Context, clientID, consoli
 		return err
 	}
 	notifRepo := repository.NewNotificationRepository(s.db)
-	return notifRepo.Create(ctx, &models.Notification{
-		ID:        uuid.New(),
-		UserID:    invitedID,
-		Type:      "consolidation_invite",
-		Payload:   payload,
-		IsRead:    false,
-		CreatedAt: time.Now(),
-	})
+	for _, memberID := range clients {
+		if memberID == clientID {
+			continue
+		}
+		if err := notifRepo.Create(ctx, &models.Notification{
+			ID:        uuid.New(),
+			UserID:    memberID,
+			Type:      "consolidation_invite",
+			Payload:   payload,
+			IsRead:    false,
+			CreatedAt: time.Now(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PayConsolidated: one-time sandbox charge that unlocks THIS consolidation
-// for the invited client (a subscription would unlock all of them).
+// for an invited member (a subscription would unlock all of them).
 func (s *CargoService) PayConsolidated(ctx context.Context, clientID, consolidatedID uuid.UUID) (*models.ConsolidatedPayment, error) {
 	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
 		return nil, err
@@ -107,10 +103,10 @@ func (s *CargoService) PayConsolidated(ctx context.Context, clientID, consolidat
 	if err != nil {
 		return nil, err
 	}
-	if cons.InviteStatus != models.InviteInvited {
+	if cons.InviteStatus == models.InviteNone {
 		return nil, ErrInviteWrongState
 	}
-	if cons.InvitedClientID == nil || *cons.InvitedClientID != clientID {
+	if cons.InitiatorClientID != nil && *cons.InitiatorClientID == clientID {
 		return nil, ErrNotInvitedClient
 	}
 
@@ -134,9 +130,10 @@ func (s *CargoService) PayConsolidated(ctx context.Context, clientID, consolidat
 	return paymentRow, nil
 }
 
-// AcceptConsolidated: the invited client joins — free with a subscription,
-// otherwise only after the one-time payment. Creates the shared client chat
-// and mutually reveals the two clients (that's the paid value).
+// AcceptConsolidated: приглашённый участник входит в группу — бесплатно по
+// подписке, иначе после разовой оплаты. Первый принявший вместе с
+// инициатором открывает общий чат; следующие подключаются к нему. Контакты
+// раскрываются между всеми принявшими (это платная ценность).
 func (s *CargoService) AcceptConsolidated(ctx context.Context, clientID, consolidatedID uuid.UUID) (*models.Chat, error) {
 	client, err := s.requireEligibleUser(ctx, clientID)
 	if err != nil {
@@ -149,18 +146,33 @@ func (s *CargoService) AcceptConsolidated(ctx context.Context, clientID, consoli
 	}
 	defer tx.Rollback(ctx)
 
-	cons, err := s.getConsolidatedForMember(ctx, tx, clientID, consolidatedID)
+	consRepo := repository.NewConsolidationRepository(tx)
+	isMember, err := consRepo.IsConsolidatedMember(ctx, clientID, consolidatedID)
 	if err != nil {
 		return nil, err
 	}
-	if cons.InviteStatus != models.InviteInvited {
+	if !isMember {
+		return nil, repository.ErrNotFound
+	}
+	// Row lock: параллельные принятия сериализуются — чат создаётся один.
+	cons, err := consRepo.GetConsolidatedByIDForUpdate(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	if cons.InviteStatus == models.InviteNone {
 		return nil, ErrInviteWrongState
 	}
-	if cons.InvitedClientID == nil || *cons.InvitedClientID != clientID {
+	if cons.InitiatorClientID != nil && *cons.InitiatorClientID == clientID {
 		return nil, ErrNotInvitedClient
 	}
+	accepted, err := consRepo.HasAcceptance(ctx, consolidatedID, clientID)
+	if err != nil {
+		return nil, err
+	}
+	if accepted {
+		return nil, ErrInviteWrongState
+	}
 
-	consRepo := repository.NewConsolidationRepository(tx)
 	if !client.HasSubscription {
 		paid, err := consRepo.HasPayment(ctx, consolidatedID, clientID)
 		if err != nil {
@@ -172,21 +184,29 @@ func (s *CargoService) AcceptConsolidated(ctx context.Context, clientID, consoli
 	}
 
 	now := time.Now()
-	chat := &models.Chat{ID: uuid.New(), ConsolidatedRequestID: &consolidatedID, CreatedAt: now}
-	chatRepo := repository.NewChatRepository(tx)
-	if err := chatRepo.Create(ctx, chat); err != nil {
+	if err := consRepo.AddAcceptance(ctx, consolidatedID, clientID); err != nil {
 		return nil, err
-	}
-	if err := chatRepo.AddParticipant(ctx, chat.ID, clientID); err != nil {
-		return nil, err
-	}
-	if cons.InitiatorClientID != nil {
-		if err := chatRepo.AddParticipant(ctx, chat.ID, *cons.InitiatorClientID); err != nil {
-			return nil, err
-		}
 	}
 
-	if err := consRepo.SetAccepted(ctx, consolidatedID, chat.ID); err != nil {
+	chatRepo := repository.NewChatRepository(tx)
+	var chat *models.Chat
+	if cons.ChatID == nil {
+		chat = &models.Chat{ID: uuid.New(), ConsolidatedRequestID: &consolidatedID, CreatedAt: now}
+		if err := chatRepo.Create(ctx, chat); err != nil {
+			return nil, err
+		}
+		if cons.InitiatorClientID != nil {
+			if err := chatRepo.AddParticipant(ctx, chat.ID, *cons.InitiatorClientID); err != nil {
+				return nil, err
+			}
+		}
+		if err := consRepo.SetAccepted(ctx, consolidatedID, chat.ID); err != nil {
+			return nil, err
+		}
+	} else {
+		chat = &models.Chat{ID: *cons.ChatID, ConsolidatedRequestID: &consolidatedID, CreatedAt: now}
+	}
+	if err := chatRepo.AddParticipant(ctx, chat.ID, clientID); err != nil {
 		return nil, err
 	}
 
@@ -217,7 +237,7 @@ func (s *CargoService) AcceptConsolidated(ctx context.Context, clientID, consoli
 	return chat, nil
 }
 
-// ClientContact is what the two clients see about EACH OTHER after accept —
+// ClientContact is what accepted group members see about EACH OTHER —
 // mutual visibility is the paid value of consolidation.
 type ClientContact struct {
 	CompanyName string `json:"company_name"`
@@ -230,31 +250,58 @@ type ConsolidatedStatusView struct {
 	AmInitiator  bool                        `json:"am_initiator"`
 	AmInvited    bool                        `json:"am_invited"`
 	PaymentDone  bool                        `json:"payment_done"`
-	// Counterpart is nil until the invite is accepted.
-	Counterpart *ClientContact `json:"counterpart,omitempty"`
+	// Группа: сколько клиентов всего и сколько приняло объединение.
+	MembersCount  int `json:"members_count"`
+	AcceptedCount int `json:"accepted_count"`
+	// Counterpart — первый из принявших (совместимость с парным UI);
+	// Counterparts — все принявшие, кроме зрителя.
+	Counterpart  *ClientContact  `json:"counterpart,omitempty"`
+	Counterparts []ClientContact `json:"counterparts,omitempty"`
 	// MyOfferID/OtherHasChosen describe the joint selection without
-	// revealing anything about the carrier before choices match.
+	// revealing anything about the carrier before the majority converges.
 	MyOfferID      *uuid.UUID `json:"my_offer_id,omitempty"`
 	OtherHasChosen bool       `json:"other_has_chosen"`
 	// SelectionState: none | waiting_other | mismatch | matched.
 	SelectionState string `json:"selection_state"`
-	// CarrierContact/CarrierID appear only when both clients picked the
-	// same offer — CarrierID enables the post-deal rating form.
+	// CarrierContact/CarrierID appear only when большинство принявших
+	// сошлось на одном оффере — CarrierID enables the post-deal rating.
 	CarrierContact *RevealedContact `json:"carrier_contact,omitempty"`
 	CarrierID      *uuid.UUID       `json:"carrier_id,omitempty"`
 }
 
-func (s *CargoService) selectionState(mine *uuid.UUID, other *uuid.UUID) string {
-	switch {
-	case mine == nil && other == nil:
-		return "none"
-	case mine != nil && other == nil, mine == nil && other != nil:
-		return "waiting_other"
-	case *mine == *other:
-		return "matched"
-	default:
-		return "mismatch"
+// groupSelectionState — выбор перевозчика группой: сделка закрывается,
+// когда БОЛЬШИНСТВО принявших участников сошлось на одном оффере (для
+// пары это в точности «оба выбрали одно»). Возвращает состояние и оффер
+// большинства, если он есть.
+func groupSelectionState(selections []models.ConsolidatedSelection, acceptedIDs []uuid.UUID) (string, *uuid.UUID) {
+	acceptedSet := make(map[uuid.UUID]bool, len(acceptedIDs))
+	for _, id := range acceptedIDs {
+		acceptedSet[id] = true
 	}
+
+	votes := make(map[uuid.UUID]int)
+	voters := 0
+	for _, sel := range selections {
+		if !acceptedSet[sel.ClientID] {
+			continue // выбор не принявшего участника не считается
+		}
+		votes[sel.OfferID]++
+		voters++
+	}
+	if voters == 0 {
+		return "none", nil
+	}
+
+	for offerID, count := range votes {
+		if count*2 > len(acceptedIDs) {
+			winner := offerID
+			return "matched", &winner
+		}
+	}
+	if voters == len(acceptedIDs) {
+		return "mismatch", nil
+	}
+	return "waiting_other", nil
 }
 
 func (s *CargoService) GetConsolidatedStatus(ctx context.Context, clientID, consolidatedID uuid.UUID) (*ConsolidatedStatusView, error) {
@@ -269,10 +316,21 @@ func (s *CargoService) GetConsolidatedStatus(ctx context.Context, clientID, cons
 	consRepo := repository.NewConsolidationRepository(s.db)
 	userRepo := repository.NewUserRepository(s.db)
 
+	memberClients, err := consRepo.ListMemberClients(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	acceptedIDs, err := consRepo.ListAcceptances(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+
 	view := &ConsolidatedStatusView{
 		Consolidated:   cons,
 		AmInitiator:    cons.InitiatorClientID != nil && *cons.InitiatorClientID == clientID,
-		AmInvited:      cons.InvitedClientID != nil && *cons.InvitedClientID == clientID,
+		AmInvited:      cons.InviteStatus != models.InviteNone && (cons.InitiatorClientID == nil || *cons.InitiatorClientID != clientID),
+		MembersCount:   len(memberClients),
+		AcceptedCount:  len(acceptedIDs),
 		SelectionState: "none",
 	}
 
@@ -282,38 +340,50 @@ func (s *CargoService) GetConsolidatedStatus(ctx context.Context, clientID, cons
 	}
 	view.PaymentDone = paid
 
-	if cons.InviteStatus == models.InviteAccepted {
-		otherID, err := s.otherMemberClient(ctx, s.db, consolidatedID, clientID)
-		if err != nil {
-			return nil, err
+	// Контакты раскрываются между принявшими участниками.
+	callerAccepted := false
+	for _, id := range acceptedIDs {
+		if id == clientID {
+			callerAccepted = true
+			break
 		}
-		other, err := userRepo.GetByID(ctx, otherID)
-		if err != nil {
-			return nil, err
+	}
+	if callerAccepted {
+		for _, id := range acceptedIDs {
+			if id == clientID {
+				continue
+			}
+			other, err := userRepo.GetByID(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			view.Counterparts = append(view.Counterparts, ClientContact{
+				CompanyName: other.CompanyName, Email: other.Email, Phone: other.Phone,
+			})
 		}
-		view.Counterpart = &ClientContact{CompanyName: other.CompanyName, Email: other.Email, Phone: other.Phone}
+		if len(view.Counterparts) > 0 {
+			view.Counterpart = &view.Counterparts[0]
+		}
 	}
 
 	selections, err := consRepo.ListSelections(ctx, consolidatedID)
 	if err != nil {
 		return nil, err
 	}
-	var mine, other *uuid.UUID
 	for i := range selections {
 		if selections[i].ClientID == clientID {
-			mine = &selections[i].OfferID
+			view.MyOfferID = &selections[i].OfferID
 		} else {
-			other = &selections[i].OfferID
+			view.OtherHasChosen = true
 		}
 	}
-	view.MyOfferID = mine
-	view.OtherHasChosen = other != nil
-	view.SelectionState = s.selectionState(mine, other)
+	state, majorityOffer := groupSelectionState(selections, acceptedIDs)
+	view.SelectionState = state
 
-	// The carrier is revealed ONLY once both clients picked the same offer.
-	if view.SelectionState == "matched" && mine != nil {
+	// The carrier is revealed ONLY once the majority converged.
+	if state == "matched" && majorityOffer != nil {
 		offerRepo := repository.NewOfferRepository(s.db)
-		offer, err := offerRepo.GetByID(ctx, *mine)
+		offer, err := offerRepo.GetByID(ctx, *majorityOffer)
 		if err != nil {
 			return nil, err
 		}
@@ -334,9 +404,10 @@ type ConsolidatedSelectResult struct {
 	CarrierID      *uuid.UUID       `json:"carrier_id,omitempty"`
 }
 
-// SelectConsolidatedOffer records the client's choice. When both clients
-// converge on the same offer, the deal closes: offer selected, consolidated
-// matched, carrier revealed to both and added to the shared chat.
+// SelectConsolidatedOffer records the member's choice. Когда большинство
+// принявших сошлось на одном оффере, the deal closes: offer selected,
+// consolidated matched, carrier revealed to the group and added to the
+// shared chat.
 func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, consolidatedID, offerID uuid.UUID) (*ConsolidatedSelectResult, error) {
 	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
 		return nil, err
@@ -356,10 +427,9 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 	if !isMember {
 		return nil, repository.ErrNotFound
 	}
-	// Row lock on the consolidation serializes the two clients: when both
-	// select "simultaneously", the second transaction waits here and then
-	// sees the status the first one committed, so the deal-closing side
-	// effects below run exactly once.
+	// Row lock on the consolidation serializes the group: параллельные
+	// выборы видят состояние друг друга, побочные эффекты закрытия сделки
+	// выполняются ровно один раз.
 	cons, err := consRepo.GetConsolidatedByIDForUpdate(ctx, consolidatedID)
 	if err != nil {
 		return nil, err
@@ -368,10 +438,9 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 		return nil, ErrConsolidationNotAccepted
 	}
 	if cons.Status == models.CargoRequestMatched {
-		// The other client's concurrent call already closed the deal —
-		// don't repeat side effects or notifications, just reveal the
-		// matched carrier.
-		result, err := s.consolidatedMatchedResult(ctx, tx, clientID, consolidatedID)
+		// The deal is already closed by a concurrent call — don't repeat
+		// side effects, just reveal the matched carrier.
+		result, err := s.consolidatedMatchedResult(ctx, tx, consolidatedID)
 		if err != nil {
 			return nil, err
 		}
@@ -382,6 +451,15 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 	}
 	if cons.Status != models.CargoRequestOpen {
 		return nil, ErrCargoNotOpen
+	}
+
+	// Выбирать могут только принявшие объединение участники.
+	callerAccepted, err := consRepo.HasAcceptance(ctx, consolidatedID, clientID)
+	if err != nil {
+		return nil, err
+	}
+	if !callerAccepted {
+		return nil, ErrConsolidationNotAccepted
 	}
 
 	offerRepo := repository.NewOfferRepository(tx)
@@ -406,19 +484,19 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 	if err != nil {
 		return nil, err
 	}
-	var mine, other *uuid.UUID
-	for i := range selections {
-		if selections[i].ClientID == clientID {
-			mine = &selections[i].OfferID
-		} else {
-			other = &selections[i].OfferID
-		}
+	acceptedIDs, err := consRepo.ListAcceptances(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
 	}
-	state := s.selectionState(mine, other)
+	state, majorityOffer := groupSelectionState(selections, acceptedIDs)
 	result := &ConsolidatedSelectResult{SelectionState: state}
 
-	if state == "matched" {
-		if err := offerRepo.UpdateStatus(ctx, offerID, models.OfferSelected); err != nil {
+	if state == "matched" && majorityOffer != nil {
+		winner, err := offerRepo.GetByID(ctx, *majorityOffer)
+		if err != nil {
+			return nil, err
+		}
+		if err := offerRepo.UpdateStatus(ctx, winner.ID, models.OfferSelected); err != nil {
 			return nil, err
 		}
 		if err := consRepo.UpdateConsolidatedStatus(ctx, consolidatedID, models.CargoRequestMatched); err != nil {
@@ -428,20 +506,20 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 		// The carrier joins the shared chat — no separate chat needed.
 		if cons.ChatID != nil {
 			chatRepo := repository.NewChatRepository(tx)
-			if err := chatRepo.AddParticipant(ctx, *cons.ChatID, offer.ParticipantID); err != nil {
+			if err := chatRepo.AddParticipant(ctx, *cons.ChatID, winner.ParticipantID); err != nil {
 				return nil, err
 			}
 		}
 
 		userRepo := repository.NewUserRepository(tx)
-		carrier, err := userRepo.GetByID(ctx, offer.ParticipantID)
+		carrier, err := userRepo.GetByID(ctx, winner.ParticipantID)
 		if err != nil {
 			return nil, err
 		}
 		result.CarrierContact = &RevealedContact{CompanyName: carrier.CompanyName, Email: carrier.Email, Phone: carrier.Phone}
 		result.CarrierID = &carrier.ID
 
-		// Notify both clients and the carrier about the closed deal.
+		// Notify the group and the carrier about the closed deal.
 		clients, err := consRepo.ListMemberClients(ctx, consolidatedID)
 		if err != nil {
 			return nil, err
@@ -449,12 +527,12 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 		notifRepo := repository.NewNotificationRepository(tx)
 		payload, err := json.Marshal(map[string]any{
 			"consolidated_request_id": consolidatedID,
-			"offer_id":                offerID,
+			"offer_id":                winner.ID,
 		})
 		if err != nil {
 			return nil, err
 		}
-		for _, uid := range append(clients, offer.ParticipantID) {
+		for _, uid := range append(clients, winner.ParticipantID) {
 			if err := notifRepo.Create(ctx, &models.Notification{
 				ID:        uuid.New(),
 				UserID:    uid,
@@ -483,26 +561,23 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 // consolidatedMatchedResult rebuilds the "matched" response for a selection
 // call that arrives after the deal is already closed — read-only, so the
 // race loser gets the revealed carrier without duplicate side effects.
-func (s *CargoService) consolidatedMatchedResult(ctx context.Context, q repository.Querier, clientID, consolidatedID uuid.UUID) (*ConsolidatedSelectResult, error) {
+func (s *CargoService) consolidatedMatchedResult(ctx context.Context, q repository.Querier, consolidatedID uuid.UUID) (*ConsolidatedSelectResult, error) {
 	consRepo := repository.NewConsolidationRepository(q)
 	selections, err := consRepo.ListSelections(ctx, consolidatedID)
 	if err != nil {
 		return nil, err
 	}
-	var mine, other *uuid.UUID
-	for i := range selections {
-		if selections[i].ClientID == clientID {
-			mine = &selections[i].OfferID
-		} else {
-			other = &selections[i].OfferID
-		}
+	acceptedIDs, err := consRepo.ListAcceptances(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
 	}
-	result := &ConsolidatedSelectResult{SelectionState: s.selectionState(mine, other)}
-	if result.SelectionState != "matched" {
+	state, majorityOffer := groupSelectionState(selections, acceptedIDs)
+	result := &ConsolidatedSelectResult{SelectionState: state}
+	if state != "matched" || majorityOffer == nil {
 		return result, nil
 	}
 
-	offer, err := repository.NewOfferRepository(q).GetByID(ctx, *mine)
+	offer, err := repository.NewOfferRepository(q).GetByID(ctx, *majorityOffer)
 	if err != nil {
 		return nil, err
 	}

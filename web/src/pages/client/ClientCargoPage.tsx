@@ -565,23 +565,32 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
         </div>
       )}
 
-      {view && accepted && view.counterpart && (
+      {view && accepted && (view.counterparts?.length ?? 0) > 0 && (
         <div className="contact-card">
-          <h3 className="detail-panel__subtitle">{t("consolidation.counterpartTitle")}</h3>
-          <dl className="detail-panel__fields">
-            <div>
-              <dt>{t("select.company")}</dt>
-              <dd>{view.counterpart.company_name || "—"}</dd>
-            </div>
-            <div>
-              <dt>{t("login.email")}</dt>
-              <dd>{view.counterpart.email}</dd>
-            </div>
-            <div>
-              <dt>{t("users.phone")}</dt>
-              <dd>{view.counterpart.phone || "—"}</dd>
-            </div>
-          </dl>
+          <h3 className="detail-panel__subtitle">
+            {t("consolidation.counterpartTitle")}
+            {view.members_count > 2 && (
+              <span className="pill pill--neutral" style={{ marginLeft: 8 }}>
+                {view.accepted_count} / {view.members_count} {t("consolidation.membersLabel")}
+              </span>
+            )}
+          </h3>
+          {(view.counterparts ?? []).map((cp, i) => (
+            <dl className="detail-panel__fields" key={i}>
+              <div>
+                <dt>{t("select.company")}</dt>
+                <dd>{cp.company_name || "—"}</dd>
+              </div>
+              <div>
+                <dt>{t("login.email")}</dt>
+                <dd>{cp.email}</dd>
+              </div>
+              <div>
+                <dt>{t("users.phone")}</dt>
+                <dd>{cp.phone || "—"}</dd>
+              </div>
+            </dl>
+          ))}
           <Link className="panel__link" to="/client/chats">
             {t("consolidation.goToSharedChat")}
           </Link>

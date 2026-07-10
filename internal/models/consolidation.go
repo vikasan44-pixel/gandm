@@ -16,13 +16,32 @@ const (
 	ConsolidationDeclined   ConsolidationStatus = "declined"
 )
 
+// ConsolidationSuggestion — предложение объединиться ГРУППЕ клиентов (ТЗ
+// §4.2 «два клиента и более»). Участники и их ответы живут в
+// consolidation_suggestion_members; статусы a_agreed/b_agreed — legacy
+// парной схемы, новые предложения проходят suggested → both_agreed
+// (группа собрана) | declined (собирать некого).
 type ConsolidationSuggestion struct {
 	ID             uuid.UUID           `json:"id"`
-	CargoRequestA  uuid.UUID           `json:"cargo_request_a"`
-	CargoRequestB  uuid.UUID           `json:"cargo_request_b"`
 	DirectionLabel string              `json:"direction_label"`
 	Status         ConsolidationStatus `json:"status"`
 	CreatedAt      time.Time           `json:"created_at"`
+}
+
+type SuggestionResponse string
+
+const (
+	SuggestionPending  SuggestionResponse = "pending"
+	SuggestionAgreed   SuggestionResponse = "agreed"
+	SuggestionDeclined SuggestionResponse = "declined"
+)
+
+// SuggestionMember — одна заявка в групповом предложении со своим ответом.
+type SuggestionMember struct {
+	SuggestionID   uuid.UUID          `json:"suggestion_id"`
+	CargoRequestID uuid.UUID          `json:"cargo_request_id"`
+	ClientID       uuid.UUID          `json:"client_id"`
+	Response       SuggestionResponse `json:"response"`
 }
 
 type ConsolidatedInviteStatus string

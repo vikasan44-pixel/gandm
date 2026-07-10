@@ -22,11 +22,11 @@ func NewConsolidationRepository(db Querier) *ConsolidationRepository {
 	return &ConsolidationRepository{db: db}
 }
 
-const suggestionColumns = `id, cargo_request_a, cargo_request_b, direction_label, status, created_at`
+const suggestionColumns = `id, direction_label, status, created_at`
 
 func scanSuggestion(row pgx.Row) (*models.ConsolidationSuggestion, error) {
 	var s models.ConsolidationSuggestion
-	err := row.Scan(&s.ID, &s.CargoRequestA, &s.CargoRequestB, &s.DirectionLabel, &s.Status, &s.CreatedAt)
+	err := row.Scan(&s.ID, &s.DirectionLabel, &s.Status, &s.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -38,10 +38,10 @@ func scanSuggestion(row pgx.Row) (*models.ConsolidationSuggestion, error) {
 
 func (r *ConsolidationRepository) CreateSuggestion(ctx context.Context, s *models.ConsolidationSuggestion) error {
 	const q = `
-		INSERT INTO consolidation_suggestions (id, cargo_request_a, cargo_request_b, direction_label, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO consolidation_suggestions (id, direction_label, status, created_at)
+		VALUES ($1, $2, $3, $4)
 	`
-	_, err := r.db.Exec(ctx, q, s.ID, s.CargoRequestA, s.CargoRequestB, s.DirectionLabel, s.Status, s.CreatedAt)
+	_, err := r.db.Exec(ctx, q, s.ID, s.DirectionLabel, s.Status, s.CreatedAt)
 	return err
 }
 
@@ -54,11 +54,12 @@ func (r *ConsolidationRepository) GetSuggestionByID(ctx context.Context, id uuid
 // resolved either way) that involves the given cargo request, if any.
 func (r *ConsolidationRepository) GetActiveSuggestionByCargoID(ctx context.Context, cargoID uuid.UUID) (*models.ConsolidationSuggestion, error) {
 	q := `
-		SELECT ` + suggestionColumns + `
-		FROM consolidation_suggestions
-		WHERE (cargo_request_a = $1 OR cargo_request_b = $1)
-		  AND status IN ('suggested', 'a_agreed', 'b_agreed')
-		ORDER BY created_at DESC
+		SELECT s.id, s.direction_label, s.status, s.created_at
+		FROM consolidation_suggestions s
+		JOIN consolidation_suggestion_members m ON m.suggestion_id = s.id
+		WHERE m.cargo_request_id = $1
+		  AND s.status IN ('suggested', 'a_agreed', 'b_agreed')
+		ORDER BY s.created_at DESC
 		LIMIT 1
 	`
 	return scanSuggestion(r.db.QueryRow(ctx, q, cargoID))
@@ -70,9 +71,10 @@ func (r *ConsolidationRepository) GetActiveSuggestionByCargoID(ctx context.Conte
 func (r *ConsolidationRepository) ExistsSuggestionForPair(ctx context.Context, a, b uuid.UUID) (bool, error) {
 	const q = `
 		SELECT EXISTS (
-			SELECT 1 FROM consolidation_suggestions
-			WHERE (cargo_request_a = $1 AND cargo_request_b = $2)
-			   OR (cargo_request_a = $2 AND cargo_request_b = $1)
+			SELECT 1
+			FROM consolidation_suggestion_members ma
+			JOIN consolidation_suggestion_members mb ON mb.suggestion_id = ma.suggestion_id
+			WHERE ma.cargo_request_id = $1 AND mb.cargo_request_id = $2
 		)
 	`
 	var exists bool
@@ -91,6 +93,88 @@ func (r *ConsolidationRepository) UpdateSuggestionStatus(ctx context.Context, id
 	return nil
 }
 
+// AddSuggestionMember записывает участника группового предложения.
+func (r *ConsolidationRepository) AddSuggestionMember(ctx context.Context, m *models.SuggestionMember) error {
+	const q = `
+		INSERT INTO consolidation_suggestion_members (suggestion_id, cargo_request_id, client_id, response)
+		VALUES ($1, $2, $3, $4)
+	`
+	_, err := r.db.Exec(ctx, q, m.SuggestionID, m.CargoRequestID, m.ClientID, m.Response)
+	return err
+}
+
+func (r *ConsolidationRepository) ListSuggestionMembers(ctx context.Context, suggestionID uuid.UUID) ([]models.SuggestionMember, error) {
+	const q = `
+		SELECT suggestion_id, cargo_request_id, client_id, response
+		FROM consolidation_suggestion_members WHERE suggestion_id = $1
+	`
+	rows, err := r.db.Query(ctx, q, suggestionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]models.SuggestionMember, 0)
+	for rows.Next() {
+		var m models.SuggestionMember
+		if err := rows.Scan(&m.SuggestionID, &m.CargoRequestID, &m.ClientID, &m.Response); err != nil {
+			return nil, err
+		}
+		items = append(items, m)
+	}
+	return items, rows.Err()
+}
+
+func (r *ConsolidationRepository) SetSuggestionMemberResponse(ctx context.Context, suggestionID, cargoID uuid.UUID, response models.SuggestionResponse) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE consolidation_suggestion_members SET response = $3 WHERE suggestion_id = $1 AND cargo_request_id = $2`,
+		suggestionID, cargoID, response)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// --- принятия платного объединения (группа: принимает каждый) ---
+
+func (r *ConsolidationRepository) AddAcceptance(ctx context.Context, consolidatedID, clientID uuid.UUID) error {
+	const q = `
+		INSERT INTO consolidated_acceptances (consolidated_request_id, client_id)
+		VALUES ($1, $2) ON CONFLICT DO NOTHING
+	`
+	_, err := r.db.Exec(ctx, q, consolidatedID, clientID)
+	return err
+}
+
+func (r *ConsolidationRepository) ListAcceptances(ctx context.Context, consolidatedID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT client_id FROM consolidated_acceptances WHERE consolidated_request_id = $1`, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make([]uuid.UUID, 0, 2)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (r *ConsolidationRepository) HasAcceptance(ctx context.Context, consolidatedID, clientID uuid.UUID) (bool, error) {
+	const q = `SELECT EXISTS (SELECT 1 FROM consolidated_acceptances WHERE consolidated_request_id = $1 AND client_id = $2)`
+	var ok bool
+	err := r.db.QueryRow(ctx, q, consolidatedID, clientID).Scan(&ok)
+	return ok, err
+}
+
 // ListOpenCargoWithoutActiveSuggestion returns the matching-service
 // candidate pool: open, non-consolidated cargo requests not already tied up
 // in a pending suggestion.
@@ -99,8 +183,9 @@ func (r *ConsolidationRepository) ListOpenCargoWithoutActiveSuggestion(ctx conte
 		SELECT ` + cargoRequestColumns + `
 		FROM cargo_requests
 		WHERE status = 'open' AND NOT EXISTS (
-			SELECT 1 FROM consolidation_suggestions cs
-			WHERE (cs.cargo_request_a = cargo_requests.id OR cs.cargo_request_b = cargo_requests.id)
+			SELECT 1 FROM consolidation_suggestion_members m
+			JOIN consolidation_suggestions cs ON cs.id = m.suggestion_id
+			WHERE m.cargo_request_id = cargo_requests.id
 			  AND cs.status IN ('suggested', 'a_agreed', 'b_agreed', 'both_agreed')
 		)
 		ORDER BY created_at ASC
@@ -233,14 +318,15 @@ func (r *ConsolidationRepository) ListOpenConsolidatedMatchingUserRoutes(ctx con
 	return r.queryConsolidated(ctx, q, userID, cnKm, kzKm)
 }
 
-// SetInvite records who initiated the pairing and who is invited.
-func (r *ConsolidationRepository) SetInvite(ctx context.Context, id, initiatorID, invitedID uuid.UUID) error {
+// SetInvite records the group-consolidation initiator; приглашены все
+// остальные участники (invited_client_id — legacy парной схемы, NULL).
+func (r *ConsolidationRepository) SetInvite(ctx context.Context, id, initiatorID uuid.UUID) error {
 	const q = `
 		UPDATE consolidated_requests
-		SET invite_status = 'invited', initiator_client_id = $2, invited_client_id = $3
+		SET invite_status = 'invited', initiator_client_id = $2, invited_client_id = NULL
 		WHERE id = $1
 	`
-	tag, err := r.db.Exec(ctx, q, id, initiatorID, invitedID)
+	tag, err := r.db.Exec(ctx, q, id, initiatorID)
 	if err != nil {
 		return err
 	}
