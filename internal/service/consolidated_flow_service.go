@@ -258,6 +258,9 @@ func (s *CargoService) selectionState(mine *uuid.UUID, other *uuid.UUID) string 
 }
 
 func (s *CargoService) GetConsolidatedStatus(ctx context.Context, clientID, consolidatedID uuid.UUID) (*ConsolidatedStatusView, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
 	cons, err := s.getConsolidatedForMember(ctx, s.db, clientID, consolidatedID)
 	if err != nil {
 		return nil, err

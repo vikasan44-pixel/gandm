@@ -24,6 +24,17 @@ type UserDetail struct {
 	Tools        []models.Tool                `json:"tools"`
 	Verification *models.VerificationRequest  `json:"verification,omitempty"`
 	Rating       repository.UserRatingSummary `json:"rating"`
+	// Иерархия «компания → сотрудники» (ТЗ §13.1): у сотрудника заполнен
+	// ParentCompany, у компании — список Employees. Без этого админ видел
+	// сотрудников как безликих участников в общем списке.
+	ParentCompany *CompanyRef           `json:"parent_company,omitempty"`
+	Employees     []repository.Employee `json:"employees,omitempty"`
+}
+
+type CompanyRef struct {
+	ID          uuid.UUID `json:"id"`
+	CompanyName string    `json:"company_name"`
+	Email       string    `json:"email"`
 }
 
 func (s *AdminService) ListUsers(ctx context.Context, f UserListFilter) ([]models.User, error) {
@@ -76,7 +87,29 @@ func (s *AdminService) GetUser(ctx context.Context, userID uuid.UUID) (*UserDeta
 		return nil, err
 	}
 
-	return &UserDetail{User: user, Tools: tools, Verification: verification, Rating: rating}, nil
+	detail := &UserDetail{User: user, Tools: tools, Verification: verification, Rating: rating}
+
+	// Иерархия сотрудников: сотрудник → ссылка на компанию, компания →
+	// список своих сотрудников.
+	var parentID *uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT parent_company_id FROM users WHERE id = $1`, userID).Scan(&parentID); err != nil {
+		return nil, err
+	}
+	if parentID != nil {
+		if company, err := userRepo.GetByID(ctx, *parentID); err == nil {
+			detail.ParentCompany = &CompanyRef{ID: company.ID, CompanyName: company.CompanyName, Email: company.Email}
+		}
+	} else {
+		employees, err := repository.NewEmployeeRepository(s.db).ListByCompanyID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		if len(employees) > 0 {
+			detail.Employees = employees
+		}
+	}
+
+	return detail, nil
 }
 
 // SetUserTools replaces a user's whole tool assignment (checkbox-list

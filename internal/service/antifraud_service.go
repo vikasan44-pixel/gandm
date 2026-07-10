@@ -34,10 +34,28 @@ func NewAntifraudService(db *pgxpool.Pool, storage *storage.S3Client) *Antifraud
 
 // --- избранное ---
 
+// requireEligible: заблокированный/отклонённый аккаунт не читает и не
+// пишет бизнес-данные (та же политика, что requireEligibleUser в
+// CargoService).
+func (s *AntifraudService) requireEligible(ctx context.Context, userID uuid.UUID) error {
+	user, err := repository.NewUserRepository(s.db).GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !isEligibleStatus(user.Status) {
+		return ErrAccountNotEligible
+	}
+	return nil
+}
+
+
 // AddFavorite: в избранное можно добавить только контрагента по
 // завершённой сделке — иначе избранное превратилось бы в канал деанона
 // анонимных предложений.
 func (s *AntifraudService) AddFavorite(ctx context.Context, clientID, participantID uuid.UUID) error {
+	if err := s.requireEligible(ctx, clientID); err != nil {
+		return err
+	}
 	if clientID == participantID {
 		return fmt.Errorf("%w: cannot favorite yourself", ErrInvalidInput)
 	}
@@ -56,6 +74,9 @@ func (s *AntifraudService) RemoveFavorite(ctx context.Context, clientID, partici
 }
 
 func (s *AntifraudService) ListFavorites(ctx context.Context, clientID uuid.UUID) ([]repository.FavoriteEntry, error) {
+	if err := s.requireEligible(ctx, clientID); err != nil {
+		return nil, err
+	}
 	return repository.NewAntifraudRepository(s.db).ListFavorites(ctx, clientID)
 }
 
@@ -104,6 +125,9 @@ func (s *AntifraudService) requireDealParty(ctx context.Context, dealID, userID 
 // UploadDealDocument stores the confirming contract for a deal (ТЗ §6.2).
 // Content type is sniffed, never trusted from the client.
 func (s *AntifraudService) UploadDealDocument(ctx context.Context, userID, dealID uuid.UUID, fileHeader *multipart.FileHeader) (*DealDocumentView, error) {
+	if err := s.requireEligible(ctx, userID); err != nil {
+		return nil, err
+	}
 	if err := s.requireDealParty(ctx, dealID, userID); err != nil {
 		return nil, err
 	}
@@ -155,6 +179,9 @@ func (s *AntifraudService) UploadDealDocument(ctx context.Context, userID, dealI
 }
 
 func (s *AntifraudService) ListDealDocuments(ctx context.Context, userID, dealID uuid.UUID) ([]DealDocumentView, error) {
+	if err := s.requireEligible(ctx, userID); err != nil {
+		return nil, err
+	}
 	if err := s.requireDealParty(ctx, dealID, userID); err != nil {
 		return nil, err
 	}

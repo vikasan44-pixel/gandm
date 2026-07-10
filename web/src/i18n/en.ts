@@ -557,6 +557,8 @@ const en: Dictionary = {
     chooseSet: "Choose a preset",
     apply: "Apply",
     assignedTools: "Participant tools",
+    parentCompany: "Employee of company",
+    employeesTitle: "Company employees",
   },
   tools: {
     title: "Tools & presets",

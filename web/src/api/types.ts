@@ -118,6 +118,17 @@ export interface UserDetail {
   tools: Tool[];
   verification?: VerificationRequest;
   rating: UserRatingSummary;
+  // Иерархия «компания → сотрудники» (ТЗ §13.1).
+  parent_company?: { id: string; company_name: string; email: string } | null;
+  employees?: CompanyEmployeeRef[] | null;
+}
+
+export interface CompanyEmployeeRef {
+  id: string;
+  email: string;
+  phone: string;
+  status: UserStatus;
+  created_at: string;
 }
 
 export interface UserLoginResponse {

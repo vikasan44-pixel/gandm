@@ -26,6 +26,8 @@ func writeAntifraudError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidInput):
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", err.Error())
+	case errors.Is(err, service.ErrAccountNotEligible):
+		httpx.WriteError(w, http.StatusForbidden, "account_not_eligible", "account status does not allow this action")
 	case errors.Is(err, service.ErrNoDealWithPartner):
 		httpx.WriteError(w, http.StatusForbidden, "no_deal", "favorites are limited to counterparties of completed deals")
 	case errors.Is(err, service.ErrUnsupportedFile):

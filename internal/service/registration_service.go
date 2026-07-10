@@ -256,20 +256,26 @@ func (s *RegistrationService) Login(ctx context.Context, email, password string)
 	return user, tokens, nil
 }
 
-// Refresh exchanges a valid refresh token for a fresh token pair. The
-// account must still exist; status is deliberately not checked, mirroring
-// Login — actual actions are gated by status/tool checks in the services.
+// Refresh exchanges a valid refresh token for a fresh token pair.
+// Заблокированный/отклонённый аккаунт refresh НЕ получает: тихая вечная
+// сессия по refresh-токену недопустима. Login для blocked остаётся (явное
+// действие, чтобы посмотреть статус через /me), но бизнес-данные и там
+// закрыты статус-проверками сервисов.
 func (s *RegistrationService) Refresh(ctx context.Context, refreshToken string) (auth.TokenPair, error) {
 	userID, err := s.tokens.ParseRefreshToken(refreshToken, auth.SubjectUser)
 	if err != nil {
 		return auth.TokenPair{}, ErrInvalidCredentials
 	}
 	userRepo := repository.NewUserRepository(s.db)
-	if _, err := userRepo.GetByID(ctx, userID); err != nil {
+	user, err := userRepo.GetByID(ctx, userID)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return auth.TokenPair{}, ErrInvalidCredentials
 		}
 		return auth.TokenPair{}, err
+	}
+	if !isEligibleStatus(user.Status) {
+		return auth.TokenPair{}, ErrInvalidCredentials
 	}
 	return s.tokens.IssueTokenPair(userID, auth.SubjectUser)
 }

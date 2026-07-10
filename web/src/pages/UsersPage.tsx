@@ -306,7 +306,32 @@ function UserDetailPanel({
             <dd>{verification.reject_reason}</dd>
           </div>
         )}
+        {detail.data.parent_company && (
+          <div>
+            <dt>{t("users.parentCompany")}</dt>
+            <dd>
+              {detail.data.parent_company.company_name || detail.data.parent_company.email}
+            </dd>
+          </div>
+        )}
       </dl>
+
+      {detail.data.employees && detail.data.employees.length > 0 && (
+        <>
+          <h3 className="detail-panel__subtitle">{t("users.employeesTitle")}</h3>
+          <ul className="tool-group__list">
+            {detail.data.employees.map((emp) => (
+              <li key={emp.id} className="tool-row">
+                <div>
+                  <div className="tool-row__name">{emp.email}</div>
+                  <div className="tool-row__key">{emp.phone || "—"}</div>
+                </div>
+                <UserStatusPill status={emp.status} />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <div className="detail-panel__actions">
         <button className="btn btn--secondary" onClick={handleBlockToggle} disabled={isSaving}>

@@ -107,6 +107,9 @@ func (s *CargoService) GetUserRating(ctx context.Context, userID uuid.UUID) (Rat
 }
 
 func (s *CargoService) ListMyReceivedRatings(ctx context.Context, userID uuid.UUID) ([]models.Rating, error) {
+	if _, err := s.requireEligibleUser(ctx, userID); err != nil {
+		return nil, err
+	}
 	ratingRepo := repository.NewRatingRepository(s.db)
 	return ratingRepo.ListReceived(ctx, userID)
 }

@@ -190,6 +190,10 @@ func (r *ToolRepository) ListUserIDsWithToolAndRoute(ctx context.Context, key st
 		JOIN users u ON u.id = ut.user_id
 		JOIN participant_routes pr ON pr.user_id = ut.user_id
 		WHERE t.key = $1 AND t.is_active = true AND u.status = 'active'
+		  -- Широтная полоса (sargable) до haversine — индекс из миграции
+		  -- 000030, точность даёт haversine ниже.
+		  AND pr.origin_lat BETWEEN $2::float8 - GREATEST($8::float8, $9::float8) / 110.0
+		                        AND $2::float8 + GREATEST($8::float8, $9::float8) / 110.0
 		  AND haversine_km(pr.origin_lat, pr.origin_lng, $2, $3)
 		      <= GREATEST(
 		           CASE WHEN pr.origin_country = 'cn' THEN $8::float8 ELSE $9::float8 END,

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gandm/internal/auth"
@@ -22,12 +23,32 @@ const touchInterval = 5 * time.Minute
 // missed activity timestamp isn't worth failing the request over.
 func TouchLastActive(userRepo *repository.UserRepository) func(http.Handler) http.Handler {
 	var lastTouch sync.Map // uuid.UUID → time.Time
+	var entries atomic.Int64
+
+	// sweep удаляет протухшие записи, когда карта разрастается — иначе за
+	// месяцы работы она копила бы по записи на каждого когда-либо
+	// заходившего пользователя (медленная утечка памяти).
+	sweep := func(now time.Time) {
+		lastTouch.Range(func(key, value any) bool {
+			if now.Sub(value.(time.Time)) >= touchInterval {
+				lastTouch.Delete(key)
+				entries.Add(-1)
+			}
+			return true
+		})
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if userID, ok := auth.UserIDFromContext(r.Context()); ok {
 				now := time.Now()
 				prev, seen := lastTouch.Load(userID)
 				if !seen || now.Sub(prev.(time.Time)) >= touchInterval {
+					if !seen {
+						if entries.Add(1) > 10_000 {
+							sweep(now)
+						}
+					}
 					lastTouch.Store(userID, now)
 					_ = userRepo.TouchLastActive(r.Context(), userID)
 				}

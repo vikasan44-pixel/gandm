@@ -104,6 +104,11 @@ func (r *CargoRequestRepository) ListOpenMatchingUserRoutes(ctx context.Context,
 		WHERE cr.status = 'open' AND EXISTS (
 			SELECT 1 FROM participant_routes pr
 			WHERE pr.user_id = $1
+			  -- Широтная полоса (sargable) до haversine: индекс из миграции
+			  -- 000030 отсекает заведомо далёкие строки, точность даёт
+			  -- haversine ниже.
+			  AND cr.origin_lat BETWEEN pr.origin_lat - GREATEST($2::float8, $3::float8) / 110.0
+			                        AND pr.origin_lat + GREATEST($2::float8, $3::float8) / 110.0
 			  AND haversine_km(pr.origin_lat, pr.origin_lng, cr.origin_lat, cr.origin_lng)
 			      <= GREATEST(
 			           CASE WHEN pr.origin_country = 'cn' THEN $2::float8 ELSE $3::float8 END,

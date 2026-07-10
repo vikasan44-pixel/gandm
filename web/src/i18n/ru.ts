@@ -555,6 +555,8 @@ const ru = {
     chooseSet: "Выберите набор",
     apply: "Применить",
     assignedTools: "Инструменты участника",
+    parentCompany: "Сотрудник компании",
+    employeesTitle: "Сотрудники компании",
   },
   tools: {
     title: "Инструменты и наборы",

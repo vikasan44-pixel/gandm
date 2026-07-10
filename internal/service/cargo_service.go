@@ -192,6 +192,9 @@ func (s *CargoService) notifyMatchingParticipants(ctx context.Context, cargo *mo
 }
 
 func (s *CargoService) ListMyCargoRequests(ctx context.Context, clientID uuid.UUID) ([]models.CargoRequest, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
 	cargoRepo := repository.NewCargoRequestRepository(s.db)
 	return cargoRepo.ListByClientID(ctx, clientID)
 }
@@ -216,19 +219,27 @@ func (s *CargoService) ListAvailableCargoRequests(ctx context.Context, participa
 // observable (smoke test, future UI) — Stage 2 wrote notifications with no
 // read path at all.
 func (s *CargoService) ListMyNotifications(ctx context.Context, userID uuid.UUID) ([]models.Notification, error) {
+	if _, err := s.requireEligibleUser(ctx, userID); err != nil {
+		return nil, err
+	}
 	notifRepo := repository.NewNotificationRepository(s.db)
 	return notifRepo.ListByUserID(ctx, userID)
 }
 
 // CountMyUnreadNotifications backs the badge poller.
 func (s *CargoService) CountMyUnreadNotifications(ctx context.Context, userID uuid.UUID) (int, error) {
+	if _, err := s.requireEligibleUser(ctx, userID); err != nil {
+		return 0, err
+	}
 	notifRepo := repository.NewNotificationRepository(s.db)
 	return notifRepo.CountUnreadByUserID(ctx, userID)
 }
 
 // MarkMyNotificationsRead flags all of the caller's notifications as read.
-// Own-data operation — no status/tool gate, same as reading them.
 func (s *CargoService) MarkMyNotificationsRead(ctx context.Context, userID uuid.UUID) error {
+	if _, err := s.requireEligibleUser(ctx, userID); err != nil {
+		return err
+	}
 	notifRepo := repository.NewNotificationRepository(s.db)
 	return notifRepo.MarkAllReadByUserID(ctx, userID)
 }
@@ -309,6 +320,9 @@ type AnonymizedOffer struct {
 }
 
 func (s *CargoService) ListOffersForClient(ctx context.Context, clientID, cargoRequestID uuid.UUID) ([]AnonymizedOffer, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
 	cargoRepo := repository.NewCargoRequestRepository(s.db)
 	cargo, err := cargoRepo.GetByID(ctx, cargoRequestID)
 	if err != nil {

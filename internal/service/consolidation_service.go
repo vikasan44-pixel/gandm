@@ -147,6 +147,9 @@ type ConsolidationView struct {
 // GetActiveConsolidation returns the pending suggestion for the client's
 // cargo request, or nil if there is none.
 func (s *CargoService) GetActiveConsolidation(ctx context.Context, clientID, cargoID uuid.UUID) (*ConsolidationView, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
 	cargoRepo := repository.NewCargoRequestRepository(s.db)
 	cargo, err := cargoRepo.GetByID(ctx, cargoID)
 	if err != nil {
@@ -345,6 +348,9 @@ func (s *CargoService) DeclineConsolidation(ctx context.Context, clientID, cargo
 }
 
 func (s *CargoService) ListMyConsolidated(ctx context.Context, clientID uuid.UUID) ([]models.ConsolidatedRequest, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
 	consRepo := repository.NewConsolidationRepository(s.db)
 	return consRepo.ListConsolidatedForClient(ctx, clientID)
 }
@@ -406,6 +412,9 @@ func (s *CargoService) CreateConsolidatedOffer(ctx context.Context, participantI
 // ListConsolidatedOffersForClient: any member client sees the shared
 // competition, anonymized exactly like single-cargo offers.
 func (s *CargoService) ListConsolidatedOffersForClient(ctx context.Context, clientID, consolidatedID uuid.UUID) ([]AnonymizedOffer, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
 	consRepo := repository.NewConsolidationRepository(s.db)
 	isMember, err := consRepo.IsConsolidatedMember(ctx, clientID, consolidatedID)
 	if err != nil {

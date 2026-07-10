@@ -30,6 +30,12 @@ func (s *CargoService) requireChatParticipant(ctx context.Context, chatID, userI
 }
 
 func (s *CargoService) ListMyChats(ctx context.Context, userID uuid.UUID) ([]repository.ChatView, error) {
+	// Заблокированный/отклонённый аккаунт не читает бизнес-данные: чаты
+	// содержат раскрытые контакты. Login для blocked остаётся (посмотреть
+	// свой статус через /me) — но не более того.
+	if _, err := s.requireEligibleUser(ctx, userID); err != nil {
+		return nil, err
+	}
 	chatRepo := repository.NewChatRepository(s.db)
 	return chatRepo.ListByUserID(ctx, userID)
 }
@@ -38,6 +44,9 @@ func (s *CargoService) ListMyChats(ctx context.Context, userID uuid.UUID) ([]rep
 // the given cursor. The cursor accepts either a message id (uuid) or an
 // RFC3339 timestamp, per the brief.
 func (s *CargoService) ListChatMessages(ctx context.Context, userID, chatID uuid.UUID, after string) ([]models.Message, error) {
+	if _, err := s.requireEligibleUser(ctx, userID); err != nil {
+		return nil, err
+	}
 	if err := s.requireChatParticipant(ctx, chatID, userID); err != nil {
 		return nil, err
 	}

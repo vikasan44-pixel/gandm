@@ -63,6 +63,19 @@ type CreateFillReportInput struct {
 	Photo               *multipart.FileHeader // optional
 }
 
+
+// requireEligible mirrors CargoService.requireEligibleUser for this service.
+func (s *WarehouseService) requireEligible(ctx context.Context, userID uuid.UUID) error {
+	user, err := repository.NewUserRepository(s.db).GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !isEligibleStatus(user.Status) {
+		return ErrAccountNotEligible
+	}
+	return nil
+}
+
 func (s *WarehouseService) CreateFillReport(ctx context.Context, userID uuid.UUID, in CreateFillReportInput) (*FillReportView, error) {
 	userRepo := repository.NewUserRepository(s.db)
 	user, err := userRepo.GetByID(ctx, userID)
@@ -150,6 +163,9 @@ func (s *WarehouseService) uploadPhoto(ctx context.Context, userID uuid.UUID, he
 }
 
 func (s *WarehouseService) ListMyFillReports(ctx context.Context, userID uuid.UUID) ([]FillReportView, error) {
+	if err := s.requireEligible(ctx, userID); err != nil {
+		return nil, err
+	}
 	fillRepo := repository.NewFillReportRepository(s.db)
 	reports, err := fillRepo.ListByUserID(ctx, userID)
 	if err != nil {

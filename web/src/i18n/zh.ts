@@ -541,6 +541,8 @@ const zh: Dictionary = {
     chooseSet: "选择套餐",
     apply: "应用",
     assignedTools: "参与方工具",
+    parentCompany: "所属公司",
+    employeesTitle: "公司员工",
   },
   tools: {
     title: "工具与套餐",

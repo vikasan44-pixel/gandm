@@ -94,8 +94,9 @@ func main() {
 	r.Use(middleware.Timeout(30 * time.Second))
 
 	// Unauthenticated credential endpoints get a per-IP limiter against
-	// password brute force; /refresh shares it (token guessing).
-	loginLimiter := appmiddleware.PerIPRateLimit(cfg.LoginRateLimitPerMin, time.Minute)
+	// password brute force; /refresh shares it (token guessing). Счётчики
+	// в Postgres — лимит держится и при нескольких инстансах бэкенда.
+	loginLimiter := appmiddleware.PerIPRateLimitDB(dbPool, cfg.LoginRateLimitPerMin, time.Minute)
 
 	r.Route("/api", func(api chi.Router) {
 		api.Get("/health", func(w http.ResponseWriter, r *http.Request) {

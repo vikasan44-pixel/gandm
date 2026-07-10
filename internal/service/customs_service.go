@@ -191,6 +191,9 @@ func (s *CargoService) CreateCustomsOffer(ctx context.Context, repID, consolidat
 // ListCustomsOffersForClient: consolidation members compare the clearance
 // bids anonymously, same policy as carrier offers.
 func (s *CargoService) ListCustomsOffersForClient(ctx context.Context, clientID, consolidatedID uuid.UUID) ([]AnonymizedCustomsOffer, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
 	if _, err := s.getConsolidatedForMember(ctx, s.db, clientID, consolidatedID); err != nil {
 		return nil, err
 	}

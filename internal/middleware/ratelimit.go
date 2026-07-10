@@ -1,18 +1,75 @@
 package middleware
 
 import (
+	"context"
+	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"gandm/internal/httpx"
 )
 
+func clientIP(r *http.Request) string {
+	// chi's RealIP middleware rewrites RemoteAddr to the bare client IP;
+	// without it RemoteAddr is host:port.
+	ip := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	return ip
+}
+
+// PerIPRateLimitDB — лимитер логина на Postgres: счётчики общие для всех
+// инстансов бэкенда, горизонтальное масштабирование не размывает лимит.
+// Отказ БД читается как «не лимитировано» (fail-open): недоступный логин
+// хуже, чем окно для перебора при уже лежащей БД. Старые записи удаляются
+// вероятностно (~1% запросов), без фонового воркера.
+func PerIPRateLimitDB(db *pgxpool.Pool, n int, window time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := clientIP(r)
+			ctx := r.Context()
+
+			var count int
+			err := db.QueryRow(ctx,
+				`SELECT count(*) FROM login_attempts WHERE ip = $1 AND attempted_at > now() - $2::interval`,
+				ip, window.String()).Scan(&count)
+			if err != nil {
+				log.Printf("rate limit: count for %s: %v", ip, err)
+				next.ServeHTTP(w, r)
+				return
+			}
+			if count >= n {
+				httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited", "too many attempts, try again later")
+				return
+			}
+
+			if _, err := db.Exec(ctx, `INSERT INTO login_attempts (ip) VALUES ($1)`, ip); err != nil {
+				log.Printf("rate limit: record attempt for %s: %v", ip, err)
+			}
+			if rand.Intn(100) == 0 {
+				go func() {
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_, _ = db.Exec(cleanupCtx,
+						`DELETE FROM login_attempts WHERE attempted_at < now() - $1::interval`, (2 * window).String())
+				}()
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // PerIPRateLimit is a fixed-window in-memory limiter for unauthenticated
-// endpoints (login/refresh): at most n requests per window per client IP.
-// State is per-process, which matches the current single-binary deployment;
-// a multi-instance setup would need a shared store instead.
+// endpoints: at most n requests per window per client IP. Per-process —
+// kept for tests and single-binary setups; production wiring uses
+// PerIPRateLimitDB above.
 func PerIPRateLimit(n int, window time.Duration) func(http.Handler) http.Handler {
 	type bucket struct {
 		windowStart time.Time
@@ -23,13 +80,7 @@ func PerIPRateLimit(n int, window time.Duration) func(http.Handler) http.Handler
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// chi's RealIP middleware rewrites RemoteAddr to the bare
-			// client IP; without it RemoteAddr is host:port.
-			ip := r.RemoteAddr
-			if host, _, err := net.SplitHostPort(ip); err == nil {
-				ip = host
-			}
-
+			ip := clientIP(r)
 			now := time.Now()
 			mu.Lock()
 			b := buckets[ip]
