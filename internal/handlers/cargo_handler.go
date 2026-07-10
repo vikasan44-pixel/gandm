@@ -219,6 +219,10 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "competition_closed", "this competition is already closed")
 	case errors.Is(err, service.ErrNoVehicles):
 		httpx.WriteError(w, http.StatusConflict, "no_vehicles", "add at least one vehicle to bid")
+	case errors.Is(err, service.ErrEmployeeOfEmployee):
+		httpx.WriteError(w, http.StatusForbidden, "employee_of_employee", "employees cannot create their own employees")
+	case errors.Is(err, repository.ErrEmailTaken):
+		httpx.WriteError(w, http.StatusConflict, "email_taken", "email is already registered")
 	case errors.Is(err, repository.ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "not found")
 	default:

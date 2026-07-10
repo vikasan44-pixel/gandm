@@ -184,6 +184,12 @@ func main() {
 			protected.Post("/consolidated/{id}/customs-offers", cargoHandler.CreateCustomsOffer)
 			protected.Get("/consolidated/{id}/customs-offers", cargoHandler.ListCustomsOffers)
 			protected.Post("/consolidated/{id}/customs-offers/{oid}/select", cargoHandler.SelectCustomsOffer)
+			// Сотрудники компании (ТЗ §13.1): суб-аккаунты внутри
+			// проверенного аккаунта компании.
+			protected.Get("/employees", cargoHandler.ListMyEmployees)
+			protected.Post("/employees", cargoHandler.CreateEmployee)
+			protected.Post("/employees/{id}/block", cargoHandler.SetEmployeeBlocked)
+
 			// Антинакрутка (ТЗ §6.2): избранное и документы сделок.
 			protected.Get("/favorites", antifraudHandler.ListFavorites)
 			protected.Post("/favorites", antifraudHandler.AddFavorite)

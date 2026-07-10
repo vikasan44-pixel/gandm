@@ -281,8 +281,13 @@ func (s *RegistrationService) GetMe(ctx context.Context, userID uuid.UUID) (*mod
 		return nil, nil, err
 	}
 
+	// У сотрудников компании (ТЗ §13.1) верификационной заявки нет —
+	// компания уже проверена; /me отдаёт verification = null.
 	verRepo := repository.NewVerificationRepository(s.db)
 	verification, err := verRepo.GetLatestByUserID(ctx, userID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return user, nil, nil
+	}
 	if err != nil {
 		return nil, nil, err
 	}

@@ -61,6 +61,7 @@ export function PartnerShell() {
     { to: "/partner/fleet", label: t("fleet.navLabel") },
     { to: "/partner/driver-competitions", label: t("driverComp.navLabel") },
     { to: "/partner/customs", label: t("customs.navLabel") },
+    { to: "/partner/employees", label: t("employees.navLabel") },
     { to: "/partner/chats", label: t("nav.chats") },
     { to: "/partner/rating", label: t("rating.navLabel") },
     { to: "/partner/notifications", label: t("nav.notifications"), badge: unreadCount },

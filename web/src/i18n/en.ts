@@ -344,6 +344,21 @@ const en: Dictionary = {
     statusOpen: "Open",
     statusClosed: "Closed",
   },
+  employees: {
+    title: "Company employees",
+    navLabel: "Employees",
+    hint:
+      "Sub-accounts for employees inside your verified company account: their own login and password, company tools are inherited automatically. Employees need no repeat document verification.",
+    addTitle: "Add an employee",
+    email: "Employee email",
+    phone: "Phone (optional)",
+    password: "Password (at least 8 characters)",
+    add: "Create login",
+    added: "Employee created — hand them the login and password",
+    empty: "No employees yet",
+    deactivate: "Deactivate",
+    activate: "Activate",
+  },
   customs: {
     title: "Customs competitions",
     navLabel: "Customs",

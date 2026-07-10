@@ -28,6 +28,7 @@ import { FillReportsPage } from "./pages/partner/FillReportsPage";
 import { FleetPage } from "./pages/partner/FleetPage";
 import { CustomsPage } from "./pages/partner/CustomsPage";
 import { DriverCompetitionsPage } from "./pages/partner/DriverCompetitionsPage";
+import { EmployeesPage } from "./pages/partner/EmployeesPage";
 
 export default function App() {
   return (
@@ -69,6 +70,7 @@ export default function App() {
               <Route path="/partner/fleet" element={<FleetPage />} />
               <Route path="/partner/driver-competitions" element={<DriverCompetitionsPage />} />
               <Route path="/partner/customs" element={<CustomsPage />} />
+              <Route path="/partner/employees" element={<EmployeesPage />} />
             </Route>
           </Route>
 

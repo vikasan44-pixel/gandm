@@ -130,13 +130,17 @@ func (r *ToolRepository) ListByUserID(ctx context.Context, userID uuid.UUID) ([]
 }
 
 // UserHasTool is the sole access-check primitive: it looks at tool
-// possession, never at participant_type.
+// possession, never at participant_type. Сотрудник компании (ТЗ §13.1)
+// наследует инструменты своей компании — parent_company_id подставляется
+// вторым кандидатом владельца инструмента.
 func (r *ToolRepository) UserHasTool(ctx context.Context, userID uuid.UUID, key string) (bool, error) {
 	const q = `
 		SELECT EXISTS (
 			SELECT 1 FROM user_tools ut
 			JOIN tools t ON t.id = ut.tool_id
-			WHERE ut.user_id = $1 AND t.key = $2 AND t.is_active = true
+			WHERE t.key = $2 AND t.is_active = true
+			  AND (ut.user_id = $1
+			       OR ut.user_id = (SELECT parent_company_id FROM users WHERE id = $1))
 		)
 	`
 	var exists bool

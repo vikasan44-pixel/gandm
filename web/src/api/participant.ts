@@ -156,6 +156,28 @@ export function deleteDispatchThreshold(routeId: string) {
   return api.del<{ status: string }>(`/routes/${routeId}/dispatch-threshold`);
 }
 
+// --- сотрудники компании (ТЗ §13.1) ---
+
+export interface CompanyEmployee {
+  id: string;
+  email: string;
+  phone: string;
+  status: string;
+  created_at: string;
+}
+
+export function getEmployees() {
+  return api.get<CompanyEmployee[]>("/employees");
+}
+
+export function createEmployee(email: string, phone: string, password: string) {
+  return api.post<CompanyEmployee>("/employees", { email, phone, password });
+}
+
+export function setEmployeeBlocked(employeeId: string, blocked: boolean) {
+  return api.post<CompanyEmployee>(`/employees/${employeeId}/block`, { blocked });
+}
+
 // --- антинакрутка (ТЗ §6.2): избранное и документы сделок ---
 
 export interface FavoriteEntry {
