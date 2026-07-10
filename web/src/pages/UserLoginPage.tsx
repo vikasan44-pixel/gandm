@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { cabinetPathFor, useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
+import { LocaleSwitcher } from "../components/common/LocaleSwitcher";
 import { t } from "../i18n";
 
 export function UserLoginPage() {
@@ -63,6 +64,7 @@ export function UserLoginPage() {
         <Link className="login-card__switch" to="/admin/login">
           {t("login.toAdminLogin")}
         </Link>
+        <LocaleSwitcher />
       </form>
     </div>
   );

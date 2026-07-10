@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
+import { LocaleSwitcher } from "../common/LocaleSwitcher";
 import { t } from "../../i18n";
 
 export interface NavItem {
@@ -32,6 +33,7 @@ export function Sidebar({ brand, nav }: { brand: string; nav: NavItem[] }) {
         ))}
       </nav>
       <div className="sidebar__footer">
+        <LocaleSwitcher />
         {identity && <div className="sidebar__admin">{identity}</div>}
         <button className="btn btn--ghost btn--sm" onClick={logout}>
           {t("nav.logout")}

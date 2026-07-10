@@ -1440,3 +1440,31 @@ textarea {
   gap: 4px;
   white-space: normal;
 }
+
+/* ---------- locale switcher ---------- */
+
+.locale-switcher {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+}
+
+.locale-switcher__btn {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.locale-switcher__btn--active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.locale-switcher__btn:hover {
+  color: var(--color-accent);
+}
