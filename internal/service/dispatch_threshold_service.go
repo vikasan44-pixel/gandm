@@ -94,6 +94,12 @@ func (s *CargoService) SetRouteDispatchThreshold(ctx context.Context, userID, ro
 	if err := s.maybeAutoAnnounceDriverCompetition(ctx, userID, route, threshold); err != nil {
 		return nil, err
 	}
+
+	// Партия склада (ТЗ §10.1): порог достигнут → общий чат клиентов
+	// партии; порог снова не добран → активная партия отправлена.
+	if err := s.syncWarehouseBatch(ctx, userID, route, threshold); err != nil {
+		return nil, err
+	}
 	return threshold, nil
 }
 

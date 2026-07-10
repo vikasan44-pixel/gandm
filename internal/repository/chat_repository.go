@@ -20,8 +20,8 @@ func NewChatRepository(db Querier) *ChatRepository {
 }
 
 func (r *ChatRepository) Create(ctx context.Context, c *models.Chat) error {
-	const q = `INSERT INTO chats (id, cargo_request_id, consolidated_request_id, driver_competition_id, created_at) VALUES ($1, $2, $3, $4, $5)`
-	_, err := r.db.Exec(ctx, q, c.ID, c.CargoRequestID, c.ConsolidatedRequestID, c.DriverCompetitionID, c.CreatedAt)
+	const q = `INSERT INTO chats (id, cargo_request_id, consolidated_request_id, driver_competition_id, warehouse_batch_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)`
+	_, err := r.db.Exec(ctx, q, c.ID, c.CargoRequestID, c.ConsolidatedRequestID, c.DriverCompetitionID, c.WarehouseBatchID, c.CreatedAt)
 	return err
 }
 
@@ -79,11 +79,11 @@ func (r *ChatRepository) ListByUserID(ctx context.Context, userID uuid.UUID) ([]
 	// clients and, after the deal, the carrier) into one row per chat.
 	const q = `
 		SELECT c.id,
-		       COALESCE(cr.origin_label, cons.origin_label, dpr.origin_label, ''),
-		       COALESCE(cr.destination_label, cons.destination_label, dpr.destination_label, ''),
+		       COALESCE(cr.origin_label, cons.origin_label, dpr.origin_label, bpr.origin_label, ''),
+		       COALESCE(cr.destination_label, cons.destination_label, dpr.destination_label, bpr.destination_label, ''),
 		       string_agg(DISTINCT COALESCE(NULLIF(u.company_name, ''), u.email), ', '),
 		       CASE WHEN count(DISTINCT other.user_id) = 1 THEN (min(other.user_id::text))::uuid ELSE NULL END,
-		       COALESCE(c.cargo_request_id, c.consolidated_request_id, c.driver_competition_id),
+		       COALESCE(c.cargo_request_id, c.consolidated_request_id, c.driver_competition_id, c.warehouse_batch_id),
 		       c.created_at
 		FROM chats c
 		JOIN chat_participants me ON me.chat_id = c.id AND me.user_id = $1
@@ -93,7 +93,9 @@ func (r *ChatRepository) ListByUserID(ctx context.Context, userID uuid.UUID) ([]
 		LEFT JOIN consolidated_requests cons ON cons.id = c.consolidated_request_id
 		LEFT JOIN driver_competitions dc ON dc.id = c.driver_competition_id
 		LEFT JOIN participant_routes dpr ON dpr.id = dc.route_id
-		GROUP BY c.id, cr.origin_label, cr.destination_label, cons.origin_label, cons.destination_label, dpr.origin_label, dpr.destination_label, c.cargo_request_id, c.consolidated_request_id, c.driver_competition_id, c.created_at
+		LEFT JOIN warehouse_batches wb ON wb.id = c.warehouse_batch_id
+		LEFT JOIN participant_routes bpr ON bpr.id = wb.route_id
+		GROUP BY c.id, cr.origin_label, cr.destination_label, cons.origin_label, cons.destination_label, dpr.origin_label, dpr.destination_label, bpr.origin_label, bpr.destination_label, c.cargo_request_id, c.consolidated_request_id, c.driver_competition_id, c.warehouse_batch_id, c.created_at
 		ORDER BY c.created_at DESC
 	`
 	rows, err := r.db.Query(ctx, q, userID)

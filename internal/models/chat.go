@@ -23,6 +23,7 @@ type Chat struct {
 	CargoRequestID        *uuid.UUID `json:"cargo_request_id,omitempty"`
 	ConsolidatedRequestID *uuid.UUID `json:"consolidated_request_id,omitempty"`
 	DriverCompetitionID   *uuid.UUID `json:"driver_competition_id,omitempty"`
+	WarehouseBatchID      *uuid.UUID `json:"warehouse_batch_id,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 }
 
