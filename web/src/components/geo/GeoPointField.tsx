@@ -6,7 +6,7 @@ import markerIcon2xUrl from "leaflet/dist/images/marker-icon-2x.png";
 import markerShadowUrl from "leaflet/dist/images/marker-shadow.png";
 import type { GeoPoint } from "../../api/types";
 import { gcj02ToWgs84 } from "../../utils/gcj02";
-import { t } from "../../i18n";
+import { getLocale, t } from "../../i18n";
 
 // Vite doesn't resolve Leaflet's default icon paths — point them at the
 // bundled assets explicitly, otherwise markers render as broken images.
@@ -29,30 +29,39 @@ interface SearchResult {
   country: string;
 }
 
-// Reverse geocode via Nominatim to get an address label and, critically,
-// the country code — the backend picks the matching radius by country.
-// Failure degrades to unknown country ("" → default radius), never blocks
-// point placement.
-async function reverseGeocodeOsm(
+// Reverse geocode the SAME coordinates in ru/en/zh so the address label reads
+// in the viewer's UI language, not the submitter's. Nominatim honours
+// accept-language and is global; when Amap is added, its Chinese label for
+// China points can slot into labels.zh without changing storage. Best-effort:
+// missing languages just fall back at display time.
+async function reverseGeocodeMultilang(
   lat: number,
   lng: number
-): Promise<{ label: string | null; country: string }> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
-    );
-    if (!res.ok) throw new Error(`nominatim ${res.status}`);
-    const data = (await res.json()) as {
-      display_name?: string;
-      address?: { country_code?: string };
-    };
-    return {
-      label: data.display_name ?? null,
-      country: (data.address?.country_code ?? "").toLowerCase(),
-    };
-  } catch {
-    return { label: null, country: "" };
-  }
+): Promise<{ labels: Record<string, string>; country: string }> {
+  const langs = ["ru", "en", "zh"];
+  const labels: Record<string, string> = {};
+  let country = "";
+  await Promise.all(
+    langs.map(async (lang) => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&accept-language=${lang}&lat=${lat}&lon=${lng}`
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          display_name?: string;
+          address?: { country_code?: string };
+        };
+        if (data.display_name) labels[lang] = data.display_name;
+        if (!country && data.address?.country_code) {
+          country = data.address.country_code.toLowerCase();
+        }
+      } catch {
+        /* ignore — this language just won't be available */
+      }
+    })
+  );
+  return { labels, country };
 }
 
 type Provider = "osm" | "amap";
@@ -95,7 +104,8 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
     lngWgs: number,
     source: Provider,
     country: string,
-    label?: string
+    label?: string,
+    labels?: Record<string, string>
   ) {
     onChangeRef.current({
       lat: latWgs,
@@ -106,6 +116,27 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
         `${latWgs.toFixed(5)}, ${lngWgs.toFixed(5)}`,
       source,
       country,
+      labels: labels ?? valueRef.current?.labels,
+    });
+  }
+
+  // Emit the point immediately (with whatever label we have), then refine it
+  // with ru/en/zh labels + country from the geocoder. Skipped if the user
+  // moved the point elsewhere before the reverse-geocode returns.
+  function emitWithMultilang(
+    latWgs: number,
+    lngWgs: number,
+    source: Provider,
+    country: string,
+    immediateLabel?: string
+  ) {
+    emitPoint(latWgs, lngWgs, source, country, immediateLabel);
+    void reverseGeocodeMultilang(latWgs, lngWgs).then((r) => {
+      const current = valueRef.current;
+      if (!current || current.lat !== latWgs || current.lng !== lngWgs) return;
+      const primary =
+        r.labels[getLocale()] || immediateLabel || r.labels.en || current.label;
+      emitPoint(latWgs, lngWgs, source, r.country || country, primary, r.labels);
     });
   }
 
@@ -113,13 +144,7 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
   // country asynchronously from the reverse geocoder. Only the label the
   // user hasn't overridden is refreshed — coords stay as placed.
   function emitOsmPointWithReverse(latWgs: number, lngWgs: number) {
-    emitPoint(latWgs, lngWgs, "osm", "");
-    void reverseGeocodeOsm(latWgs, lngWgs).then((r) => {
-      const current = valueRef.current;
-      // Skip the update if the user already moved the point elsewhere.
-      if (!current || current.lat !== latWgs || current.lng !== lngWgs) return;
-      emitPoint(latWgs, lngWgs, "osm", r.country, r.label ?? undefined);
-    });
+    emitWithMultilang(latWgs, lngWgs, "osm", "");
   }
 
   // --- OSM (Leaflet) ---
@@ -187,7 +212,7 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
               const pos = marker.getPosition();
               const wgs = gcj02ToWgs84(pos.getLat(), pos.getLng());
               // Amap maps China only — country is always cn.
-              emitPoint(wgs.lat, wgs.lng, "amap", "cn");
+              emitWithMultilang(wgs.lat, wgs.lng, "amap", "cn");
             });
             map.add(marker);
             amapMarkerRef.current = marker;
@@ -200,7 +225,7 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
           const lngGcj = e.lnglat.getLng();
           setMarker(lngGcj, latGcj);
           const wgs = gcj02ToWgs84(latGcj, lngGcj);
-          emitPoint(wgs.lat, wgs.lng, "amap", "cn");
+          emitWithMultilang(wgs.lat, wgs.lng, "amap", "cn");
         });
 
         amapMapRef.current = { map, setMarker };
@@ -310,14 +335,14 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
         });
         leafletMarkerRef.current = marker;
       }
-      emitPoint(result.lat, result.lng, "osm", result.country, result.label);
+      emitWithMultilang(result.lat, result.lng, "osm", result.country, result.label);
     } else {
       if (amapMapRef.current) {
         amapMapRef.current.map.setZoomAndCenter(11, [result.lng, result.lat]);
         amapMapRef.current.setMarker(result.lng, result.lat);
       }
       const wgs = gcj02ToWgs84(result.lat, result.lng);
-      emitPoint(wgs.lat, wgs.lng, "amap", "cn", result.label);
+      emitWithMultilang(wgs.lat, wgs.lng, "amap", "cn", result.label);
     }
   }
 

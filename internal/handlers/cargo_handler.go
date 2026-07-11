@@ -27,11 +27,12 @@ func NewCargoHandler(svc *service.CargoService) *CargoHandler {
 // must already be WGS-84 (the frontend converts Amap's GCJ-02 before
 // submitting); source records provenance for debugging.
 type geoPointPayload struct {
-	Lat     float64 `json:"lat"`
-	Lng     float64 `json:"lng"`
-	Label   string  `json:"label"`
-	Source  string  `json:"source"`
-	Country string  `json:"country"`
+	Lat     float64           `json:"lat"`
+	Lng     float64           `json:"lng"`
+	Label   string            `json:"label"`
+	Source  string            `json:"source"`
+	Country string            `json:"country"`
+	Labels  map[string]string `json:"labels"`
 }
 
 func (p geoPointPayload) toModel() models.GeoPoint {
@@ -41,6 +42,7 @@ func (p geoPointPayload) toModel() models.GeoPoint {
 		Label:   p.Label,
 		Source:  models.CoordSource(p.Source),
 		Country: p.Country,
+		Labels:  p.Labels,
 	}
 }
 

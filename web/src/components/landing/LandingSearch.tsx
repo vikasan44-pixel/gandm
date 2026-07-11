@@ -9,6 +9,7 @@ import {
 } from "../../api/public";
 import { ApiError } from "../../api/client";
 import { BODY_TYPE_KEYS, bodyTypeLabel } from "../../utils/bodyType";
+import { pickLabel } from "../../utils/geoLabel";
 import { t } from "../../i18n";
 import type { GeoPoint } from "../../api/types";
 
@@ -191,16 +192,19 @@ function TransportCard({ card }: { card: PublicVehicleCard }) {
   return (
     <li className="public-card">
       <div className="public-card__route">
-        {bodyTypeLabel(card.body_type)} · {card.capacity_kg.toLocaleString("ru-RU")} кг
-        {card.capacity_m3 > 0 ? ` · ${card.capacity_m3} м³` : ""} · {card.axles} ос.
+        {bodyTypeLabel(card.body_type)} · {card.capacity_kg.toLocaleString()} {t("fleet.unitKg")}
+        {card.capacity_m3 > 0 ? ` · ${card.capacity_m3} ${t("fleet.unitM3")}` : ""} · {card.axles}{" "}
+        {t("fleet.unitAxles")}
       </div>
       <div className="public-card__meta">
-        {card.length_m} × {card.width_m} × {card.height_m} м
-        {card.location_label ? ` · ${t("landing.search.location")}: ${card.location_label}` : ""}
+        {card.length_m} × {card.width_m} × {card.height_m} {t("fleet.unitM")}
+        {card.location_label
+          ? ` · ${t("landing.search.location")}: ${pickLabel(card.location_labels, card.location_label)}`
+          : ""}
       </div>
-      {card.destination_labels.length > 0 && (
+      {card.destinations.length > 0 && (
         <div className="public-card__meta">
-          {t("landing.search.direction")}: {card.destination_labels.join(", ")}
+          {t("landing.search.direction")}: {card.destinations.map((d) => pickLabel(d.labels, d.label)).join(", ")}
         </div>
       )}
       <button className="btn btn--ghost btn--sm" type="button" disabled title={t("landing.search.loginToView")}>

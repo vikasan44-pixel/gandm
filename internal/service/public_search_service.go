@@ -27,19 +27,27 @@ type PublicCargoCard struct {
 	CreatedAt          time.Time `json:"created_at"`
 }
 
+// PublicPoint — подпись точки для гостя: основная + карта языков (без
+// координат, чтобы не раскрывать точное место).
+type PublicPoint struct {
+	Label  string            `json:"label"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
 // PublicVehicleCard — анонимная карточка транспорта для гостя.
 type PublicVehicleCard struct {
-	ID                uuid.UUID `json:"id"`
-	BodyType          string    `json:"body_type"`
-	CapacityKg        float64   `json:"capacity_kg"`
-	CapacityM3        float64   `json:"capacity_m3"`
-	LengthM           float64   `json:"length_m"`
-	WidthM            float64   `json:"width_m"`
-	HeightM           float64   `json:"height_m"`
-	Axles             int       `json:"axles"`
-	LocationLabel     string    `json:"location_label,omitempty"`
-	DestinationLabels []string  `json:"destination_labels"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID             uuid.UUID         `json:"id"`
+	BodyType       string            `json:"body_type"`
+	CapacityKg     float64           `json:"capacity_kg"`
+	CapacityM3     float64           `json:"capacity_m3"`
+	LengthM        float64           `json:"length_m"`
+	WidthM         float64           `json:"width_m"`
+	HeightM        float64           `json:"height_m"`
+	Axles          int               `json:"axles"`
+	LocationLabel  string            `json:"location_label,omitempty"`
+	LocationLabels map[string]string `json:"location_labels,omitempty"`
+	Destinations   []PublicPoint     `json:"destinations"`
+	CreatedAt      time.Time         `json:"created_at"`
 }
 
 // PublicSearchCargo — открытые заявки на груз по координатам from/to (обе
@@ -84,15 +92,16 @@ func (s *CargoService) PublicSearchVehicles(ctx context.Context, f repository.Ve
 			LengthM:           v.LengthM,
 			WidthM:            v.WidthM,
 			HeightM:           v.HeightM,
-			Axles:             v.Axles,
-			DestinationLabels: []string{},
-			CreatedAt:         v.CreatedAt,
+			Axles:        v.Axles,
+			Destinations: []PublicPoint{},
+			CreatedAt:    v.CreatedAt,
 		}
 		if v.Location != nil {
 			card.LocationLabel = v.Location.Label
+			card.LocationLabels = v.Location.Labels
 		}
 		for _, d := range v.Destinations {
-			card.DestinationLabels = append(card.DestinationLabels, d.Point.Label)
+			card.Destinations = append(card.Destinations, PublicPoint{Label: d.Point.Label, Labels: d.Point.Labels})
 		}
 		cards = append(cards, card)
 	}

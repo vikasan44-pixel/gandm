@@ -14,6 +14,7 @@ import { EmptyState } from "../../components/common/EmptyState";
 import { ApiError } from "../../api/client";
 import { GeoPointField } from "../../components/geo/GeoPointField";
 import { BODY_TYPE_KEYS, bodyTypeLabel } from "../../utils/bodyType";
+import { pickLabel } from "../../utils/geoLabel";
 import { t } from "../../i18n";
 import type { GeoPoint, Vehicle } from "../../api/types";
 
@@ -215,15 +216,16 @@ function VehicleRow({
     <li className="tool-row">
       <div>
         <div className="tool-row__name">
-          {bodyTypeLabel(vehicle.body_type)} · {vehicle.capacity_kg.toLocaleString("ru-RU")} кг
-          {vehicle.capacity_m3 > 0 ? ` · ${vehicle.capacity_m3} м³` : ""} · {vehicle.axles} ос.
+          {bodyTypeLabel(vehicle.body_type)} · {vehicle.capacity_kg.toLocaleString()} {t("fleet.unitKg")}
+          {vehicle.capacity_m3 > 0 ? ` · ${vehicle.capacity_m3} ${t("fleet.unitM3")}` : ""} · {vehicle.axles}{" "}
+          {t("fleet.unitAxles")}
         </div>
         <div className="tool-row__key">
-          {vehicle.length_m} × {vehicle.width_m} × {vehicle.height_m} м
+          {vehicle.length_m} × {vehicle.width_m} × {vehicle.height_m} {t("fleet.unitM")}
         </div>
 
         <div className="tool-row__key">
-          {t("fleet.location")}: {vehicle.location ? vehicle.location.label : t("fleet.locationNone")}
+          {t("fleet.location")}: {vehicle.location ? pickLabel(vehicle.location.labels, vehicle.location.label) : t("fleet.locationNone")}
         </div>
 
         {/* Назначения (несколько), каждое можно удалить. */}
@@ -231,7 +233,7 @@ function VehicleRow({
           <ul className="fleet-dest-list">
             {vehicle.destinations.map((d) => (
               <li key={d.id} className="fleet-dest-list__item">
-                <span>→ {d.point.label}</span>
+                <span>→ {pickLabel(d.point.labels, d.point.label)}</span>
                 <button
                   className="btn btn--ghost btn--sm"
                   disabled={busy}

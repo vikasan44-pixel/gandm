@@ -23,4 +23,10 @@ type GeoPoint struct {
 	Label   string      `json:"label"`
 	Source  CoordSource `json:"source"`
 	Country string      `json:"country"`
+	// Labels — подпись на языках интерфейса ("ru"/"en"/"zh"), заполняется
+	// геокодером при постановке точки. Показ выбирает по языку (fallback:
+	// язык → en → Label). Пустая карта/nil — есть только Label. Хранится
+	// сейчас у местонахождения машины и её назначений; для грузов/маршрутов
+	// пока не персистится (fallback на Label).
+	Labels map[string]string `json:"labels,omitempty"`
 }

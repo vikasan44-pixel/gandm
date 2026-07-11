@@ -16,6 +16,11 @@ export interface PublicCargoCard {
   created_at: string;
 }
 
+export interface PublicPoint {
+  label: string;
+  labels?: Record<string, string>;
+}
+
 export interface PublicVehicleCard {
   id: string;
   body_type: string;
@@ -26,7 +31,8 @@ export interface PublicVehicleCard {
   height_m: number;
   axles: number;
   location_label?: string;
-  destination_labels: string[];
+  location_labels?: Record<string, string>;
+  destinations: PublicPoint[];
   created_at: string;
 }
 

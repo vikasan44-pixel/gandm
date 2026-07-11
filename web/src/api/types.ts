@@ -157,6 +157,9 @@ export interface GeoPoint {
   label: string;
   source: CoordSource;
   country: string;
+  // Подпись на языках интерфейса (ru/en/zh) из геокодера — чтобы адрес
+  // показывался на языке пользователя. Отсутствует → есть только label.
+  labels?: Record<string, string>;
 }
 
 export interface CargoRequest {
