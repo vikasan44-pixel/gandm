@@ -102,6 +102,8 @@ textarea {
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
+  /* Never let a control's intrinsic width push it past its container. */
+  max-width: 100%;
 }
 
 input:focus,
@@ -251,6 +253,17 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+}
+
+/* Inputs fill their field and are allowed to shrink — a file/date input's
+   intrinsic width (the native button + text) otherwise forces the field
+   wider than a narrow phone screen. */
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  min-width: 0;
 }
 
 .field__label {
@@ -488,6 +501,8 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
 
@@ -555,18 +570,30 @@ textarea {
 .activity-feed__item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   padding: 6px 0;
   font-size: 13px;
 }
 
+/* The action label is a pill; let it wrap its text on narrow screens instead
+   of holding a fixed nowrap width that pushes the row off-screen. */
+.activity-feed__item > .pill {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .activity-feed__name {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .activity-feed__date {
   color: var(--color-text-muted);
   font-size: 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* ---------- verification queue ---------- */
@@ -844,7 +871,10 @@ textarea {
 
 .tools-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0,1fr), not 1fr: a bare 1fr track is minmax(auto,1fr) and refuses
+     to shrink below its content's min-content, so a long tool key/description
+     pushes the whole panel past the viewport on phones. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
@@ -875,17 +905,34 @@ textarea {
   padding: 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
+  /* On narrow screens the action button drops under the text block instead
+     of forcing the row wider than the viewport. */
+  flex-wrap: wrap;
+}
+
+/* The text block (unnamed div) must be able to shrink below its content, or
+   the monospace tool key (an unbreakable token) forces the row past the
+   screen width. */
+.tool-row > div {
+  min-width: 0;
+}
+
+.tool-row > .btn {
+  flex-shrink: 0;
 }
 
 .tool-row__name {
   font-weight: 500;
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .tool-row__key {
   font-size: 11px;
   color: var(--color-text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Long keys like receive_cargo_by_route break instead of overflowing. */
+  overflow-wrap: anywhere;
 }
 
 .tool-row__description {
@@ -1158,14 +1205,25 @@ textarea {
 }
 
 @media (max-width: 960px) {
-  .page--split {
-    grid-template-columns: 1fr;
-  }
   .tools-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .stat-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Split (list + sticky detail) layouts collapse to one column below ~1080px.
+   The 220px sidebar eats into the page, so two columns (list ~420 + detail
+   ~340 + gap) only really fit above this width; below it the detail column
+   gets starved and its maps/inputs overflow. Covers tablets (768, 1024). */
+@media (max-width: 1080px) {
+  .page--split,
+  .page--split-wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .page__detail {
+    position: static;
   }
 }
 
@@ -1464,6 +1522,7 @@ textarea {
 
 .analytics-periods {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
