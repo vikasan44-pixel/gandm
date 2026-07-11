@@ -47,6 +47,31 @@ type VehicleInput struct {
 	HeightM         float64
 	BodyType        string
 	CurrentLocation string
+	// Опциональное объявленное направление для публичного поиска. Оба конца
+	// либо заданы (координатами), либо nil — направление нужно целиком.
+	ReadyOrigin      *models.GeoPoint
+	ReadyDestination *models.GeoPoint
+}
+
+// validateReadyDirection проверяет опциональное направление: либо оба конца
+// заданы и валидны (координаты из геокодера), либо ни одного. Возвращает
+// нормализованные точки (или nil).
+func validateReadyDirection(in VehicleInput) (origin, destination *models.GeoPoint, err error) {
+	if in.ReadyOrigin == nil && in.ReadyDestination == nil {
+		return nil, nil, nil
+	}
+	if in.ReadyOrigin == nil || in.ReadyDestination == nil {
+		return nil, nil, fmt.Errorf("%w: ready direction needs both origin and destination", ErrInvalidInput)
+	}
+	o, err := validateGeoPoint("ready_origin", *in.ReadyOrigin)
+	if err != nil {
+		return nil, nil, err
+	}
+	d, err := validateGeoPoint("ready_destination", *in.ReadyDestination)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &o, &d, nil
 }
 
 func validateVehicleInput(in VehicleInput) error {
@@ -85,6 +110,10 @@ func (s *CargoService) AddMyVehicle(ctx context.Context, userID uuid.UUID, in Ve
 	if err := validateVehicleInput(in); err != nil {
 		return nil, err
 	}
+	readyOrigin, readyDestination, err := validateReadyDirection(in)
+	if err != nil {
+		return nil, err
+	}
 
 	vehicleRepo := repository.NewVehicleRepository(s.db)
 	count, err := vehicleRepo.CountByUserID(ctx, userID)
@@ -96,16 +125,18 @@ func (s *CargoService) AddMyVehicle(ctx context.Context, userID uuid.UUID, in Ve
 	}
 
 	vehicle := &models.Vehicle{
-		ID:              uuid.New(),
-		UserID:          userID,
-		Axles:           in.Axles,
-		CapacityKg:      in.CapacityKg,
-		LengthM:         in.LengthM,
-		WidthM:          in.WidthM,
-		HeightM:         in.HeightM,
-		BodyType:        strings.TrimSpace(in.BodyType),
-		CurrentLocation: strings.TrimSpace(in.CurrentLocation),
-		CreatedAt:       time.Now(),
+		ID:               uuid.New(),
+		UserID:           userID,
+		Axles:            in.Axles,
+		CapacityKg:       in.CapacityKg,
+		LengthM:          in.LengthM,
+		WidthM:           in.WidthM,
+		HeightM:          in.HeightM,
+		BodyType:         strings.TrimSpace(in.BodyType),
+		CurrentLocation:  strings.TrimSpace(in.CurrentLocation),
+		ReadyOrigin:      readyOrigin,
+		ReadyDestination: readyDestination,
+		CreatedAt:        time.Now(),
 	}
 	if err := vehicleRepo.Create(ctx, vehicle); err != nil {
 		return nil, err

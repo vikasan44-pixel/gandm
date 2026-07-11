@@ -111,6 +111,13 @@ func main() {
 		// Каталог участнических инструментов — публичный: нужен на экране
 		// регистрации, где человек ещё не авторизован.
 		api.Get("/tools/catalog", cargoHandler.ToolCatalog)
+
+		// Гостевой поиск (без авторизации): анонимные карточки грузов и
+		// транспорта по координатам+радиусу. Контакты и детали — только после
+		// входа. Регистрируем ДО protected-группы.
+		api.Get("/public/cargo", cargoHandler.PublicSearchCargo)
+		api.Get("/public/transport", cargoHandler.PublicSearchTransport)
+
 		api.With(loginLimiter).Post("/register", registerHandler.Register)
 		api.With(loginLimiter).Post("/login", registerHandler.Login)
 		api.With(loginLimiter).Post("/refresh", registerHandler.Refresh)

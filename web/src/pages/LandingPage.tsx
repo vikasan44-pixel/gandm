@@ -1,6 +1,7 @@
 import { Link, Navigate } from "react-router-dom";
 import { cabinetPathFor, useAuth } from "../auth/AuthContext";
 import { LocaleSwitcher } from "../components/common/LocaleSwitcher";
+import { LandingSearch } from "../components/landing/LandingSearch";
 import { t } from "../i18n";
 
 // Гостевая страница: рекламирует, что человек может делать на платформе, и
@@ -26,6 +27,8 @@ export function LandingPage() {
           </Link>
         </div>
       </header>
+
+      <LandingSearch />
 
       <section className="landing__columns">
         <div className="landing__card">

@@ -18,5 +18,10 @@ type Vehicle struct {
 	HeightM         float64   `json:"height_m"`
 	BodyType        string    `json:"body_type"`
 	CurrentLocation string    `json:"current_location"`
-	CreatedAt       time.Time `json:"created_at"`
+	// Опциональное объявленное направление «готов везти откуда → куда»,
+	// координатами (как груз/маршруты) — для публичного поиска по радиусу.
+	// nil, если направление не указано.
+	ReadyOrigin      *GeoPoint `json:"ready_origin,omitempty"`
+	ReadyDestination *GeoPoint `json:"ready_destination,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
 }

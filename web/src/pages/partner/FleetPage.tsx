@@ -10,8 +10,9 @@ import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
 import { ApiError } from "../../api/client";
+import { GeoPointField } from "../../components/geo/GeoPointField";
 import { t } from "../../i18n";
-import type { Vehicle } from "../../api/types";
+import type { GeoPoint, Vehicle } from "../../api/types";
 
 const BODY_TYPES = [
   "bodyTented",
@@ -35,6 +36,9 @@ export function FleetPage() {
   const [height, setHeight] = useState("");
   const [bodyType, setBodyType] = useState<string>(t("fleet.bodyTented"));
   const [location, setLocation] = useState("");
+  // Опциональное направление «готов везти откуда → куда» для публичного поиска.
+  const [readyOrigin, setReadyOrigin] = useState<GeoPoint | null>(null);
+  const [readyDestination, setReadyDestination] = useState<GeoPoint | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -52,6 +56,11 @@ export function FleetPage() {
       setError(t("fleet.bodyTypeRequired"));
       return;
     }
+    // Направление — целиком или никак: нельзя указать только один конец.
+    if (Boolean(readyOrigin) !== Boolean(readyDestination)) {
+      setError(t("fleet.directionBothOrNone"));
+      return;
+    }
     setIsSubmitting(true);
     try {
       await addVehicle({
@@ -62,6 +71,8 @@ export function FleetPage() {
         height_m: Number(height),
         body_type: bodyType,
         current_location: location,
+        ready_origin: readyOrigin,
+        ready_destination: readyDestination,
       });
       setNotice(t("fleet.added"));
       setCapacity("");
@@ -69,6 +80,8 @@ export function FleetPage() {
       setWidth("");
       setHeight("");
       setLocation("");
+      setReadyOrigin(null);
+      setReadyDestination(null);
       vehicles.reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
@@ -132,6 +145,11 @@ export function FleetPage() {
             <span className="field__label">{t("fleet.location")}</span>
             <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder={t("fleet.locationPlaceholder")} />
           </label>
+          <p className="panel__hint">{t("fleet.directionHint")}</p>
+          <div className="field-row">
+            <GeoPointField title={t("fleet.readyOrigin")} value={readyOrigin} onChange={setReadyOrigin} />
+            <GeoPointField title={t("fleet.readyDestination")} value={readyDestination} onChange={setReadyDestination} />
+          </div>
           <button className="btn btn--primary btn--sm" type="submit" disabled={isSubmitting}>
             {isSubmitting ? t("common.loading") : t("fleet.add")}
           </button>
@@ -188,6 +206,11 @@ function VehicleRow({
         <div className="tool-row__key">
           {vehicle.length_m} × {vehicle.width_m} × {vehicle.height_m} м
         </div>
+        {vehicle.ready_origin && vehicle.ready_destination && (
+          <div className="tool-row__key">
+            {t("fleet.directionLabel")}: {vehicle.ready_origin.label} → {vehicle.ready_destination.label}
+          </div>
+        )}
         <div className="inline-form" style={{ marginTop: 6 }}>
           <input
             value={location}

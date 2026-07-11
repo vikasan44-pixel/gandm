@@ -44,6 +44,28 @@ body {
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  /* Belt-and-suspenders against accidental horizontal scroll on phones —
+     the layout should never need it, so clipping any stray overflow is safe
+     and keeps the mobile view from jittering sideways. */
+  overflow-x: hidden;
+}
+
+/* Notch / home-indicator safe areas. With viewport-fit=cover an installed PWA
+   can draw under the status bar and home indicator; env() insets are 0 on
+   devices without them, so these rules are inert everywhere else. */
+@supports (padding: env(safe-area-inset-top)) {
+  .landing {
+    padding-left: max(24px, env(safe-area-inset-left));
+    padding-right: max(24px, env(safe-area-inset-right));
+  }
+  .app-shell__content {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+  @media (max-width: 720px) {
+    .sidebar {
+      padding-top: calc(12px + env(safe-area-inset-top));
+    }
+  }
 }
 
 h1,
@@ -596,6 +618,8 @@ textarea {
 
 .detail-panel__title {
   font-size: 17px;
+  /* Title may be a long email when the company name is empty. */
+  overflow-wrap: anywhere;
 }
 
 .detail-panel__subtitle {
@@ -623,6 +647,18 @@ textarea {
 
 .detail-panel__fields dt {
   color: var(--color-text-muted);
+  /* Keep the label on one line; only the value column absorbs the shrink. */
+  flex-shrink: 0;
+}
+
+.detail-panel__fields dd {
+  /* <dd> ships a 40px browser margin — reset it. min-width:0 + break lets a
+     long unbreakable value (email, token, phone) wrap inside the panel
+     instead of overflowing past its right edge. */
+  margin: 0;
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .detail-panel__actions {
@@ -1284,6 +1320,87 @@ textarea {
   padding-top: 24px;
 }
 
+/* ---------- landing guest search ---------- */
+
+.landing__search {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.landing-search__tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.landing-search__tab {
+  flex: 1;
+  padding: 10px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.landing-search__tab--active {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  border-color: var(--color-accent);
+}
+
+.landing-search__results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.landing-search__count {
+  font-weight: 600;
+}
+
+.landing-search__list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .landing-search__list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.public-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.public-card__route {
+  font-weight: 600;
+}
+
+.public-card__meta {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.landing-search__gate {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  font-size: 14px;
+  background: var(--color-surface-muted, transparent);
+}
+
 /* ---------- register ---------- */
 
 .login-card--wide {
@@ -1324,11 +1441,23 @@ textarea {
 
 .field-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
+/* min-width:0 lets flex items shrink below their content width (default
+   min-width:auto is what pushes maps/inputs past the viewport on mobile).
+   The basis makes number inputs pack 2-up and wrap instead of overflowing. */
 .field-row .field {
-  flex: 1;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+/* Geo pickers carry a map — give them a wide basis so two sit side by side on
+   desktop but each wraps to a full row on a phone. */
+.field-row > .geo-field {
+  flex: 1 1 260px;
+  min-width: 0;
 }
 
 /* ---------- analytics ---------- */

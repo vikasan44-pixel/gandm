@@ -9,6 +9,7 @@ import (
 
 	"gandm/internal/auth"
 	"gandm/internal/httpx"
+	"gandm/internal/models"
 	"gandm/internal/service"
 )
 
@@ -20,6 +21,18 @@ type vehicleRequest struct {
 	HeightM         float64 `json:"height_m"`
 	BodyType        string  `json:"body_type"`
 	CurrentLocation string  `json:"current_location"`
+	// Опциональное объявленное направление «готов везти откуда → куда»
+	// координатами (для публичного поиска по радиусу). Оба или ни одного.
+	ReadyOrigin      *geoPointPayload `json:"ready_origin"`
+	ReadyDestination *geoPointPayload `json:"ready_destination"`
+}
+
+func (p *geoPointPayload) toModelPtr() *models.GeoPoint {
+	if p == nil {
+		return nil
+	}
+	m := p.toModel()
+	return &m
 }
 
 func (h *CargoHandler) ListMyVehicles(w http.ResponseWriter, r *http.Request) {
@@ -51,13 +64,15 @@ func (h *CargoHandler) AddMyVehicle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vehicle, err := h.svc.AddMyVehicle(r.Context(), userID, service.VehicleInput{
-		Axles:           req.Axles,
-		CapacityKg:      req.CapacityKg,
-		LengthM:         req.LengthM,
-		WidthM:          req.WidthM,
-		HeightM:         req.HeightM,
-		BodyType:        req.BodyType,
-		CurrentLocation: req.CurrentLocation,
+		Axles:            req.Axles,
+		CapacityKg:       req.CapacityKg,
+		LengthM:          req.LengthM,
+		WidthM:           req.WidthM,
+		HeightM:          req.HeightM,
+		BodyType:         req.BodyType,
+		CurrentLocation:  req.CurrentLocation,
+		ReadyOrigin:      req.ReadyOrigin.toModelPtr(),
+		ReadyDestination: req.ReadyDestination.toModelPtr(),
 	})
 	if err != nil {
 		writeCargoServiceError(w, err)

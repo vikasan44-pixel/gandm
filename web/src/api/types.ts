@@ -205,6 +205,10 @@ export interface Vehicle {
   height_m: number;
   body_type: string;
   current_location: string;
+  // Опциональное объявленное направление «готов везти откуда → куда»
+  // координатами (для публичного поиска). null, если не указано.
+  ready_origin?: GeoPoint | null;
+  ready_destination?: GeoPoint | null;
   created_at: string;
 }
 

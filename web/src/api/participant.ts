@@ -134,6 +134,10 @@ export interface VehicleInput {
   height_m: number;
   body_type: string;
   current_location: string;
+  // Опциональное направление «готов везти откуда → куда» координатами (для
+  // публичного поиска). Оба конца вместе, либо ни одного.
+  ready_origin?: GeoPoint | null;
+  ready_destination?: GeoPoint | null;
 }
 
 export function getVehicles() {
