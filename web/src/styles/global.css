@@ -1518,6 +1518,30 @@ textarea {
   min-width: 0;
 }
 
+/* Fleet: one destination picker (map + remove button) in the add form. */
+.fleet-destination {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Fleet card: the list of a vehicle's destinations, each removable. */
+.fleet-dest-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.fleet-dest-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
 /* ---------- analytics ---------- */
 
 .analytics-periods {

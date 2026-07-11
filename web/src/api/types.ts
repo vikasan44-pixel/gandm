@@ -195,20 +195,25 @@ export interface AnonymizedOffer {
   status: OfferStatus;
 }
 
+export interface VehicleDestination {
+  id: string;
+  point: GeoPoint;
+}
+
 export interface Vehicle {
   id: string;
   user_id: string;
   axles: number;
   capacity_kg: number;
+  capacity_m3: number;
   length_m: number;
   width_m: number;
   height_m: number;
   body_type: string;
-  current_location: string;
-  // Опциональное объявленное направление «готов везти откуда → куда»
-  // координатами (для публичного поиска). null, если не указано.
-  ready_origin?: GeoPoint | null;
-  ready_destination?: GeoPoint | null;
+  // Местонахождение координатами (по карте), опционально — «откуда».
+  location?: GeoPoint | null;
+  // Ноль или несколько назначений (координатами) — «куда».
+  destinations: VehicleDestination[];
   created_at: string;
 }
 

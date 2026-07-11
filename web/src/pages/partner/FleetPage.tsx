@@ -2,7 +2,9 @@ import { useState, type FormEvent } from "react";
 import { useAsync } from "../../hooks/useAsync";
 import {
   addVehicle,
+  addVehicleDestination,
   deleteVehicle,
+  deleteVehicleDestination,
   getVehicles,
   updateVehicleLocation,
 } from "../../api/participant";
@@ -25,20 +27,21 @@ const BODY_TYPES = [
 
 // FleetPage — транспорт участника (ТЗ §11.1). Доступ гейтится бэкендом по
 // инструменту manage_fleet: без него список отвечает 403 tool_required, и
-// страница показывает локализованное сообщение.
+// страница показывает локализованное сообщение. Местонахождение и назначения
+// указываются координатами (по карте); назначений может быть несколько.
 export function FleetPage() {
   const vehicles = useAsync(getVehicles, []);
 
   const [axles, setAxles] = useState("2");
-  const [capacity, setCapacity] = useState("");
+  const [capacityKg, setCapacityKg] = useState("");
+  const [capacityM3, setCapacityM3] = useState("");
   const [length, setLength] = useState("");
   const [width, setWidth] = useState("");
   const [height, setHeight] = useState("");
   const [bodyType, setBodyType] = useState<string>(t("fleet.bodyTented"));
-  const [location, setLocation] = useState("");
-  // Опциональное направление «готов везти откуда → куда» для публичного поиска.
-  const [readyOrigin, setReadyOrigin] = useState<GeoPoint | null>(null);
-  const [readyDestination, setReadyDestination] = useState<GeoPoint | null>(null);
+  // Местонахождение (по карте) и назначения — всё опционально.
+  const [location, setLocation] = useState<GeoPoint | null>(null);
+  const [destinations, setDestinations] = useState<(GeoPoint | null)[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -47,7 +50,7 @@ export function FleetPage() {
     e.preventDefault();
     setError(null);
     setNotice(null);
-    const numbers = [Number(axles), Number(capacity), Number(length), Number(width), Number(height)];
+    const numbers = [Number(axles), Number(capacityKg), Number(length), Number(width), Number(height)];
     if (numbers.some((n) => !Number.isFinite(n) || n <= 0)) {
       setError(t("fleet.numbersPositive"));
       return;
@@ -56,32 +59,27 @@ export function FleetPage() {
       setError(t("fleet.bodyTypeRequired"));
       return;
     }
-    // Направление — целиком или никак: нельзя указать только один конец.
-    if (Boolean(readyOrigin) !== Boolean(readyDestination)) {
-      setError(t("fleet.directionBothOrNone"));
-      return;
-    }
     setIsSubmitting(true);
     try {
       await addVehicle({
         axles: Number(axles),
-        capacity_kg: Number(capacity),
+        capacity_kg: Number(capacityKg),
+        capacity_m3: Number(capacityM3) || 0,
         length_m: Number(length),
         width_m: Number(width),
         height_m: Number(height),
         body_type: bodyType,
-        current_location: location,
-        ready_origin: readyOrigin,
-        ready_destination: readyDestination,
+        location,
+        destinations: destinations.filter((d): d is GeoPoint => d !== null),
       });
       setNotice(t("fleet.added"));
-      setCapacity("");
+      setCapacityKg("");
+      setCapacityM3("");
       setLength("");
       setWidth("");
       setHeight("");
-      setLocation("");
-      setReadyOrigin(null);
-      setReadyDestination(null);
+      setLocation(null);
+      setDestinations([]);
       vehicles.reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
@@ -100,6 +98,10 @@ export function FleetPage() {
     }
   }
 
+  function setDestinationAt(i: number, v: GeoPoint | null) {
+    setDestinations((prev) => prev.map((d, idx) => (idx === i ? v : d)));
+  }
+
   return (
     <div className="page">
       <h1 className="page__title">{t("fleet.title")}</h1>
@@ -114,8 +116,14 @@ export function FleetPage() {
             </label>
             <label className="field">
               <span className="field__label">{t("fleet.capacity")}</span>
-              <input type="number" min={1} step="any" value={capacity} onChange={(e) => setCapacity(e.target.value)} required />
+              <input type="number" min={1} step="any" value={capacityKg} onChange={(e) => setCapacityKg(e.target.value)} required />
             </label>
+            <label className="field">
+              <span className="field__label">{t("fleet.capacityM3")}</span>
+              <input type="number" min={0} step="any" value={capacityM3} onChange={(e) => setCapacityM3(e.target.value)} />
+            </label>
+          </div>
+          <div className="field-row">
             <label className="field">
               <span className="field__label">{t("fleet.bodyType")}</span>
               <select value={bodyType} onChange={(e) => setBodyType(e.target.value)}>
@@ -126,8 +134,6 @@ export function FleetPage() {
                 ))}
               </select>
             </label>
-          </div>
-          <div className="field-row">
             <label className="field">
               <span className="field__label">{t("fleet.length")}</span>
               <input type="number" min={0.1} step="any" value={length} onChange={(e) => setLength(e.target.value)} required />
@@ -141,15 +147,27 @@ export function FleetPage() {
               <input type="number" min={0.1} step="any" value={height} onChange={(e) => setHeight(e.target.value)} required />
             </label>
           </div>
-          <label className="field">
-            <span className="field__label">{t("fleet.location")}</span>
-            <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder={t("fleet.locationPlaceholder")} />
-          </label>
-          <p className="panel__hint">{t("fleet.directionHint")}</p>
-          <div className="field-row">
-            <GeoPointField title={t("fleet.readyOrigin")} value={readyOrigin} onChange={setReadyOrigin} />
-            <GeoPointField title={t("fleet.readyDestination")} value={readyDestination} onChange={setReadyDestination} />
-          </div>
+
+          <p className="panel__hint">{t("fleet.locationHint")}</p>
+          <GeoPointField title={t("fleet.location")} value={location} onChange={setLocation} />
+
+          <p className="panel__hint">{t("fleet.destinationsHint")}</p>
+          {destinations.map((d, i) => (
+            <div key={i} className="fleet-destination">
+              <GeoPointField title={`${t("fleet.destination")} ${i + 1}`} value={d} onChange={(v) => setDestinationAt(i, v)} />
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => setDestinations((prev) => prev.filter((_, idx) => idx !== i))}
+              >
+                {t("fleet.removeDestination")}
+              </button>
+            </div>
+          ))}
+          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setDestinations((prev) => [...prev, null])}>
+            {t("fleet.addDestination")}
+          </button>
+
           <button className="btn btn--primary btn--sm" type="submit" disabled={isSubmitting}>
             {isSubmitting ? t("common.loading") : t("fleet.add")}
           </button>
@@ -183,16 +201,19 @@ function VehicleRow({
   onDelete: (id: string) => void;
   onChanged: () => void;
 }) {
-  const [location, setLocation] = useState(vehicle.current_location);
-  const [isSaving, setIsSaving] = useState(false);
+  const [editingLocation, setEditingLocation] = useState(false);
+  const [newLocation, setNewLocation] = useState<GeoPoint | null>(vehicle.location ?? null);
+  const [addingDest, setAddingDest] = useState(false);
+  const [newDest, setNewDest] = useState<GeoPoint | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function saveLocation() {
-    setIsSaving(true);
+  async function run(fn: () => Promise<unknown>) {
+    setBusy(true);
     try {
-      await updateVehicleLocation(vehicle.id, location);
+      await fn();
       onChanged();
     } finally {
-      setIsSaving(false);
+      setBusy(false);
     }
   }
 
@@ -200,27 +221,80 @@ function VehicleRow({
     <li className="tool-row">
       <div>
         <div className="tool-row__name">
-          {vehicle.body_type} · {vehicle.capacity_kg.toLocaleString("ru-RU")} кг ·{" "}
-          {vehicle.axles} ос.
+          {vehicle.body_type} · {vehicle.capacity_kg.toLocaleString("ru-RU")} кг
+          {vehicle.capacity_m3 > 0 ? ` · ${vehicle.capacity_m3} м³` : ""} · {vehicle.axles} ос.
         </div>
         <div className="tool-row__key">
           {vehicle.length_m} × {vehicle.width_m} × {vehicle.height_m} м
         </div>
-        {vehicle.ready_origin && vehicle.ready_destination && (
-          <div className="tool-row__key">
-            {t("fleet.directionLabel")}: {vehicle.ready_origin.label} → {vehicle.ready_destination.label}
-          </div>
+
+        <div className="tool-row__key">
+          {t("fleet.location")}: {vehicle.location ? vehicle.location.label : t("fleet.locationNone")}
+        </div>
+
+        {/* Назначения (несколько), каждое можно удалить. */}
+        {vehicle.destinations.length > 0 && (
+          <ul className="fleet-dest-list">
+            {vehicle.destinations.map((d) => (
+              <li key={d.id} className="fleet-dest-list__item">
+                <span>→ {d.point.label}</span>
+                <button
+                  className="btn btn--ghost btn--sm"
+                  disabled={busy}
+                  onClick={() => void run(() => deleteVehicleDestination(vehicle.id, d.id))}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
+
         <div className="inline-form" style={{ marginTop: 6 }}>
-          <input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder={t("fleet.locationPlaceholder")}
-          />
-          <button className="btn btn--secondary btn--sm" onClick={() => void saveLocation()} disabled={isSaving}>
-            {isSaving ? t("common.loading") : t("fleet.updateLocation")}
+          <button className="btn btn--secondary btn--sm" onClick={() => setEditingLocation((v) => !v)}>
+            {t("fleet.updateLocation")}
+          </button>
+          <button className="btn btn--secondary btn--sm" onClick={() => setAddingDest((v) => !v)}>
+            {t("fleet.addDestination")}
           </button>
         </div>
+
+        {editingLocation && (
+          <div style={{ marginTop: 8 }}>
+            <GeoPointField title={t("fleet.location")} value={newLocation} onChange={setNewLocation} />
+            <button
+              className="btn btn--primary btn--sm"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await updateVehicleLocation(vehicle.id, newLocation);
+                  setEditingLocation(false);
+                })
+              }
+            >
+              {t("common.save")}
+            </button>
+          </div>
+        )}
+
+        {addingDest && (
+          <div style={{ marginTop: 8 }}>
+            <GeoPointField title={t("fleet.destination")} value={newDest} onChange={setNewDest} />
+            <button
+              className="btn btn--primary btn--sm"
+              disabled={busy || !newDest}
+              onClick={() =>
+                void run(async () => {
+                  if (newDest) await addVehicleDestination(vehicle.id, newDest);
+                  setNewDest(null);
+                  setAddingDest(false);
+                })
+              }
+            >
+              {t("common.save")}
+            </button>
+          </div>
+        )}
       </div>
       <button className="btn btn--ghost btn--sm" onClick={() => onDelete(vehicle.id)}>
         {t("fleet.delete")}

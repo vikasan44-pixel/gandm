@@ -55,6 +55,7 @@ func (h *CargoHandler) PublicSearchTransport(w http.ResponseWriter, r *http.Requ
 	filter := repository.VehicleSearchFilter{
 		BodyType:      q.Get("body_type"),
 		MinCapacityKg: floatQuery(r, "min_capacity_kg"),
+		MinCapacityM3: floatQuery(r, "min_capacity_m3"),
 		MinLengthM:    floatQuery(r, "min_length_m"),
 		MinWidthM:     floatQuery(r, "min_width_m"),
 		MinHeightM:    floatQuery(r, "min_height_m"),

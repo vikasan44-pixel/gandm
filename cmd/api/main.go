@@ -179,6 +179,8 @@ func main() {
 			protected.Get("/fleet", cargoHandler.ListMyVehicles)
 			protected.Post("/fleet", cargoHandler.AddMyVehicle)
 			protected.Patch("/fleet/{id}/location", cargoHandler.UpdateMyVehicleLocation)
+			protected.Post("/fleet/{id}/destinations", cargoHandler.AddMyVehicleDestination)
+			protected.Delete("/fleet/{id}/destinations/{did}", cargoHandler.DeleteMyVehicleDestination)
 			protected.Delete("/fleet/{id}", cargoHandler.DeleteMyVehicle)
 
 			// Пороги отправки склада (manage_warehouse_slots, ТЗ §5.2).

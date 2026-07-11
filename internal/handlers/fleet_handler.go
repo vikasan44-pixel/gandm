@@ -14,17 +14,17 @@ import (
 )
 
 type vehicleRequest struct {
-	Axles           int     `json:"axles"`
-	CapacityKg      float64 `json:"capacity_kg"`
-	LengthM         float64 `json:"length_m"`
-	WidthM          float64 `json:"width_m"`
-	HeightM         float64 `json:"height_m"`
-	BodyType        string  `json:"body_type"`
-	CurrentLocation string  `json:"current_location"`
-	// Опциональное объявленное направление «готов везти откуда → куда»
-	// координатами (для публичного поиска по радиусу). Оба или ни одного.
-	ReadyOrigin      *geoPointPayload `json:"ready_origin"`
-	ReadyDestination *geoPointPayload `json:"ready_destination"`
+	Axles      int     `json:"axles"`
+	CapacityKg float64 `json:"capacity_kg"`
+	CapacityM3 float64 `json:"capacity_m3"`
+	LengthM    float64 `json:"length_m"`
+	WidthM     float64 `json:"width_m"`
+	HeightM    float64 `json:"height_m"`
+	BodyType   string  `json:"body_type"`
+	// Опциональное местонахождение координатами (по карте) — «откуда».
+	Location *geoPointPayload `json:"location"`
+	// Ноль или несколько назначений (координатами) — «куда».
+	Destinations []geoPointPayload `json:"destinations"`
 }
 
 func (p *geoPointPayload) toModelPtr() *models.GeoPoint {
@@ -33,6 +33,14 @@ func (p *geoPointPayload) toModelPtr() *models.GeoPoint {
 	}
 	m := p.toModel()
 	return &m
+}
+
+func geoPayloadsToModels(ps []geoPointPayload) []models.GeoPoint {
+	out := make([]models.GeoPoint, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.toModel())
+	}
+	return out
 }
 
 func (h *CargoHandler) ListMyVehicles(w http.ResponseWriter, r *http.Request) {
@@ -64,15 +72,15 @@ func (h *CargoHandler) AddMyVehicle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vehicle, err := h.svc.AddMyVehicle(r.Context(), userID, service.VehicleInput{
-		Axles:            req.Axles,
-		CapacityKg:       req.CapacityKg,
-		LengthM:          req.LengthM,
-		WidthM:           req.WidthM,
-		HeightM:          req.HeightM,
-		BodyType:         req.BodyType,
-		CurrentLocation:  req.CurrentLocation,
-		ReadyOrigin:      req.ReadyOrigin.toModelPtr(),
-		ReadyDestination: req.ReadyDestination.toModelPtr(),
+		Axles:        req.Axles,
+		CapacityKg:   req.CapacityKg,
+		CapacityM3:   req.CapacityM3,
+		LengthM:      req.LengthM,
+		WidthM:       req.WidthM,
+		HeightM:      req.HeightM,
+		BodyType:     req.BodyType,
+		Location:     req.Location.toModelPtr(),
+		Destinations: geoPayloadsToModels(req.Destinations),
 	})
 	if err != nil {
 		writeCargoServiceError(w, err)
@@ -81,8 +89,9 @@ func (h *CargoHandler) AddMyVehicle(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, vehicle)
 }
 
+// vehicleLocationRequest carries an optional map point; null clears it.
 type vehicleLocationRequest struct {
-	CurrentLocation string `json:"current_location"`
+	Location *geoPointPayload `json:"location"`
 }
 
 func (h *CargoHandler) UpdateMyVehicleLocation(w http.ResponseWriter, r *http.Request) {
@@ -103,12 +112,63 @@ func (h *CargoHandler) UpdateMyVehicleLocation(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	vehicle, err := h.svc.UpdateMyVehicleLocation(r.Context(), userID, vehicleID, req.CurrentLocation)
+	vehicle, err := h.svc.UpdateMyVehicleLocation(r.Context(), userID, vehicleID, req.Location.toModelPtr())
 	if err != nil {
 		writeCargoServiceError(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, vehicle)
+}
+
+type vehicleDestinationRequest struct {
+	Point geoPointPayload `json:"point"`
+}
+
+func (h *CargoHandler) AddMyVehicleDestination(w http.ResponseWriter, r *http.Request) {
+	vehicleID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid vehicle id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	var req vehicleDestinationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "malformed JSON body")
+		return
+	}
+	dest, err := h.svc.AddMyVehicleDestination(r.Context(), userID, vehicleID, req.Point.toModel())
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, dest)
+}
+
+func (h *CargoHandler) DeleteMyVehicleDestination(w http.ResponseWriter, r *http.Request) {
+	vehicleID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid vehicle id")
+		return
+	}
+	destID, err := uuid.Parse(chi.URLParam(r, "did"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid destination id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	if err := h.svc.DeleteMyVehicleDestination(r.Context(), userID, vehicleID, destID); err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *CargoHandler) DeleteMyVehicle(w http.ResponseWriter, r *http.Request) {

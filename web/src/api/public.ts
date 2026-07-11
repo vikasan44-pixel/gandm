@@ -20,19 +20,20 @@ export interface PublicVehicleCard {
   id: string;
   body_type: string;
   capacity_kg: number;
+  capacity_m3: number;
   length_m: number;
   width_m: number;
   height_m: number;
   axles: number;
-  current_location: string;
-  ready_origin_label?: string;
-  ready_destination_label?: string;
+  location_label?: string;
+  destination_labels: string[];
   created_at: string;
 }
 
 export interface TransportSearchFilter {
   body_type?: string;
   min_capacity_kg?: number;
+  min_capacity_m3?: number;
   min_length_m?: number;
   min_width_m?: number;
   min_height_m?: number;
@@ -64,6 +65,7 @@ export function searchPublicTransport(
   const params = new URLSearchParams();
   if (filter.body_type) params.set("body_type", filter.body_type);
   if (filter.min_capacity_kg) params.set("min_capacity_kg", String(filter.min_capacity_kg));
+  if (filter.min_capacity_m3) params.set("min_capacity_m3", String(filter.min_capacity_m3));
   if (filter.min_length_m) params.set("min_length_m", String(filter.min_length_m));
   if (filter.min_width_m) params.set("min_width_m", String(filter.min_width_m));
   if (filter.min_height_m) params.set("min_height_m", String(filter.min_height_m));

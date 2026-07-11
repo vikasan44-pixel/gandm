@@ -40,38 +40,38 @@ func (s *CargoService) vehicleLimit(ctx context.Context) int {
 }
 
 type VehicleInput struct {
-	Axles           int
-	CapacityKg      float64
-	LengthM         float64
-	WidthM          float64
-	HeightM         float64
-	BodyType        string
-	CurrentLocation string
-	// Опциональное объявленное направление для публичного поиска. Оба конца
-	// либо заданы (координатами), либо nil — направление нужно целиком.
-	ReadyOrigin      *models.GeoPoint
-	ReadyDestination *models.GeoPoint
+	Axles      int
+	CapacityKg float64
+	CapacityM3 float64
+	LengthM    float64
+	WidthM     float64
+	HeightM    float64
+	BodyType   string
+	// Опциональное местонахождение координатами (по карте) — «откуда».
+	Location *models.GeoPoint
+	// Ноль или несколько назначений (координатами) — «куда».
+	Destinations []models.GeoPoint
 }
 
-// validateReadyDirection проверяет опциональное направление: либо оба конца
-// заданы и валидны (координаты из геокодера), либо ни одного. Возвращает
-// нормализованные точки (или nil).
-func validateReadyDirection(in VehicleInput) (origin, destination *models.GeoPoint, err error) {
-	if in.ReadyOrigin == nil && in.ReadyDestination == nil {
-		return nil, nil, nil
+// validateVehicleGeo проверяет опциональное местонахождение и список
+// назначений (каждое — координаты из геокодера). Возвращает нормализованные
+// значения.
+func validateVehicleGeo(in VehicleInput) (loc *models.GeoPoint, dests []models.GeoPoint, err error) {
+	if in.Location != nil {
+		l, e := validateGeoPoint("location", *in.Location)
+		if e != nil {
+			return nil, nil, e
+		}
+		loc = &l
 	}
-	if in.ReadyOrigin == nil || in.ReadyDestination == nil {
-		return nil, nil, fmt.Errorf("%w: ready direction needs both origin and destination", ErrInvalidInput)
+	for i, d := range in.Destinations {
+		vd, e := validateGeoPoint(fmt.Sprintf("destinations[%d]", i), d)
+		if e != nil {
+			return nil, nil, e
+		}
+		dests = append(dests, vd)
 	}
-	o, err := validateGeoPoint("ready_origin", *in.ReadyOrigin)
-	if err != nil {
-		return nil, nil, err
-	}
-	d, err := validateGeoPoint("ready_destination", *in.ReadyDestination)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &o, &d, nil
+	return loc, dests, nil
 }
 
 func validateVehicleInput(in VehicleInput) error {
@@ -80,6 +80,9 @@ func validateVehicleInput(in VehicleInput) error {
 	}
 	if in.CapacityKg <= 0 {
 		return fmt.Errorf("%w: capacity_kg must be positive", ErrInvalidInput)
+	}
+	if in.CapacityM3 < 0 {
+		return fmt.Errorf("%w: capacity_m3 must not be negative", ErrInvalidInput)
 	}
 	if in.LengthM <= 0 || in.WidthM <= 0 || in.HeightM <= 0 {
 		return fmt.Errorf("%w: dimensions must be positive", ErrInvalidInput)
@@ -110,7 +113,7 @@ func (s *CargoService) AddMyVehicle(ctx context.Context, userID uuid.UUID, in Ve
 	if err := validateVehicleInput(in); err != nil {
 		return nil, err
 	}
-	readyOrigin, readyDestination, err := validateReadyDirection(in)
+	location, dests, err := validateVehicleGeo(in)
 	if err != nil {
 		return nil, err
 	}
@@ -125,49 +128,100 @@ func (s *CargoService) AddMyVehicle(ctx context.Context, userID uuid.UUID, in Ve
 	}
 
 	vehicle := &models.Vehicle{
-		ID:               uuid.New(),
-		UserID:           userID,
-		Axles:            in.Axles,
-		CapacityKg:       in.CapacityKg,
-		LengthM:          in.LengthM,
-		WidthM:           in.WidthM,
-		HeightM:          in.HeightM,
-		BodyType:         strings.TrimSpace(in.BodyType),
-		CurrentLocation:  strings.TrimSpace(in.CurrentLocation),
-		ReadyOrigin:      readyOrigin,
-		ReadyDestination: readyDestination,
-		CreatedAt:        time.Now(),
+		ID:         uuid.New(),
+		UserID:     userID,
+		Axles:      in.Axles,
+		CapacityKg: in.CapacityKg,
+		CapacityM3: in.CapacityM3,
+		LengthM:    in.LengthM,
+		WidthM:     in.WidthM,
+		HeightM:    in.HeightM,
+		BodyType:   strings.TrimSpace(in.BodyType),
+		Location:   location,
+		CreatedAt:  time.Now(),
 	}
 	if err := vehicleRepo.Create(ctx, vehicle); err != nil {
 		return nil, err
 	}
+	// Начальные назначения (могут отсутствовать — добавит позже).
+	vehicle.Destinations = make([]models.VehicleDestination, 0, len(dests))
+	for _, d := range dests {
+		saved, err := vehicleRepo.AddDestination(ctx, vehicle.ID, d)
+		if err != nil {
+			return nil, err
+		}
+		vehicle.Destinations = append(vehicle.Destinations, saved)
+	}
 	return vehicle, nil
 }
 
-// UpdateMyVehicleLocation — «текущее местонахождение можно обновлять в любое
-// время» (ТЗ §11.1). Someone else's vehicle reads as not-found, not
-// forbidden (same policy as routes).
-func (s *CargoService) UpdateMyVehicleLocation(ctx context.Context, userID, vehicleID uuid.UUID, location string) (*models.Vehicle, error) {
-	if err := s.requireActiveUser(ctx, userID); err != nil {
-		return nil, err
-	}
-	if err := s.requireTool(ctx, userID, ToolManageFleet); err != nil {
-		return nil, err
-	}
-
-	vehicleRepo := repository.NewVehicleRepository(s.db)
-	vehicle, err := vehicleRepo.GetByID(ctx, vehicleID)
+// UpdateMyVehicleLocation — «местонахождение можно обновлять в любое время»
+// (ТЗ §11.1). Теперь координатами (по карте); nil очищает точку. Чужая машина
+// читается как not-found (та же политика, что у маршрутов).
+func (s *CargoService) UpdateMyVehicleLocation(ctx context.Context, userID, vehicleID uuid.UUID, location *models.GeoPoint) (*models.Vehicle, error) {
+	vehicleRepo, vehicle, err := s.ownedVehicle(ctx, userID, vehicleID)
 	if err != nil {
 		return nil, err
 	}
-	if vehicle.UserID != userID {
-		return nil, repository.ErrNotFound
+	var loc *models.GeoPoint
+	if location != nil {
+		l, e := validateGeoPoint("location", *location)
+		if e != nil {
+			return nil, e
+		}
+		loc = &l
 	}
-	vehicle.CurrentLocation = strings.TrimSpace(location)
-	if err := vehicleRepo.UpdateLocation(ctx, vehicleID, vehicle.CurrentLocation); err != nil {
+	if err := vehicleRepo.UpdateLocation(ctx, vehicleID, loc); err != nil {
 		return nil, err
 	}
+	vehicle.Location = loc
 	return vehicle, nil
+}
+
+// AddMyVehicleDestination adds one more destination to the owner's vehicle.
+func (s *CargoService) AddMyVehicleDestination(ctx context.Context, userID, vehicleID uuid.UUID, point models.GeoPoint) (*models.VehicleDestination, error) {
+	vehicleRepo, _, err := s.ownedVehicle(ctx, userID, vehicleID)
+	if err != nil {
+		return nil, err
+	}
+	p, err := validateGeoPoint("destination", point)
+	if err != nil {
+		return nil, err
+	}
+	saved, err := vehicleRepo.AddDestination(ctx, vehicleID, p)
+	if err != nil {
+		return nil, err
+	}
+	return &saved, nil
+}
+
+// DeleteMyVehicleDestination removes one destination from the owner's vehicle.
+func (s *CargoService) DeleteMyVehicleDestination(ctx context.Context, userID, vehicleID, destID uuid.UUID) error {
+	vehicleRepo, _, err := s.ownedVehicle(ctx, userID, vehicleID)
+	if err != nil {
+		return err
+	}
+	return vehicleRepo.DeleteDestination(ctx, vehicleID, destID)
+}
+
+// ownedVehicle loads a vehicle after checking the user is active, holds the
+// fleet tool, and owns it (else not-found). Shared by the mutating methods.
+func (s *CargoService) ownedVehicle(ctx context.Context, userID, vehicleID uuid.UUID) (*repository.VehicleRepository, *models.Vehicle, error) {
+	if err := s.requireActiveUser(ctx, userID); err != nil {
+		return nil, nil, err
+	}
+	if err := s.requireTool(ctx, userID, ToolManageFleet); err != nil {
+		return nil, nil, err
+	}
+	vehicleRepo := repository.NewVehicleRepository(s.db)
+	vehicle, err := vehicleRepo.GetByID(ctx, vehicleID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if vehicle.UserID != userID {
+		return nil, nil, repository.ErrNotFound
+	}
+	return vehicleRepo, vehicle, nil
 }
 
 func (s *CargoService) DeleteMyVehicle(ctx context.Context, userID, vehicleID uuid.UUID) error {

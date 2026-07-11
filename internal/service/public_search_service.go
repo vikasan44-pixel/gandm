@@ -29,17 +29,17 @@ type PublicCargoCard struct {
 
 // PublicVehicleCard — анонимная карточка транспорта для гостя.
 type PublicVehicleCard struct {
-	ID                    uuid.UUID `json:"id"`
-	BodyType              string    `json:"body_type"`
-	CapacityKg            float64   `json:"capacity_kg"`
-	LengthM               float64   `json:"length_m"`
-	WidthM                float64   `json:"width_m"`
-	HeightM               float64   `json:"height_m"`
-	Axles                 int       `json:"axles"`
-	CurrentLocation       string    `json:"current_location"`
-	ReadyOriginLabel      string    `json:"ready_origin_label,omitempty"`
-	ReadyDestinationLabel string    `json:"ready_destination_label,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
+	ID                uuid.UUID `json:"id"`
+	BodyType          string    `json:"body_type"`
+	CapacityKg        float64   `json:"capacity_kg"`
+	CapacityM3        float64   `json:"capacity_m3"`
+	LengthM           float64   `json:"length_m"`
+	WidthM            float64   `json:"width_m"`
+	HeightM           float64   `json:"height_m"`
+	Axles             int       `json:"axles"`
+	LocationLabel     string    `json:"location_label,omitempty"`
+	DestinationLabels []string  `json:"destination_labels"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 // PublicSearchCargo — открытые заявки на груз по координатам from/to (обе
@@ -77,21 +77,22 @@ func (s *CargoService) PublicSearchVehicles(ctx context.Context, f repository.Ve
 	cards := make([]PublicVehicleCard, 0, len(rows))
 	for _, v := range rows {
 		card := PublicVehicleCard{
-			ID:              v.ID,
-			BodyType:        v.BodyType,
-			CapacityKg:      v.CapacityKg,
-			LengthM:         v.LengthM,
-			WidthM:          v.WidthM,
-			HeightM:         v.HeightM,
-			Axles:           v.Axles,
-			CurrentLocation: v.CurrentLocation,
-			CreatedAt:       v.CreatedAt,
+			ID:                v.ID,
+			BodyType:          v.BodyType,
+			CapacityKg:        v.CapacityKg,
+			CapacityM3:        v.CapacityM3,
+			LengthM:           v.LengthM,
+			WidthM:            v.WidthM,
+			HeightM:           v.HeightM,
+			Axles:             v.Axles,
+			DestinationLabels: []string{},
+			CreatedAt:         v.CreatedAt,
 		}
-		if v.ReadyOrigin != nil {
-			card.ReadyOriginLabel = v.ReadyOrigin.Label
+		if v.Location != nil {
+			card.LocationLabel = v.Location.Label
 		}
-		if v.ReadyDestination != nil {
-			card.ReadyDestinationLabel = v.ReadyDestination.Label
+		for _, d := range v.Destinations {
+			card.DestinationLabels = append(card.DestinationLabels, d.Point.Label)
 		}
 		cards = append(cards, card)
 	}

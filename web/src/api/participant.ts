@@ -14,6 +14,7 @@ import type {
   OpenDriverCompetition,
   RouteWithThreshold,
   Vehicle,
+  VehicleDestination,
   ChatMessage,
   ChatView,
   ConsolidatedRequest,
@@ -129,15 +130,15 @@ export function deleteRoute(routeId: string) {
 export interface VehicleInput {
   axles: number;
   capacity_kg: number;
+  capacity_m3: number;
   length_m: number;
   width_m: number;
   height_m: number;
   body_type: string;
-  current_location: string;
-  // Опциональное направление «готов везти откуда → куда» координатами (для
-  // публичного поиска). Оба конца вместе, либо ни одного.
-  ready_origin?: GeoPoint | null;
-  ready_destination?: GeoPoint | null;
+  // Опциональное местонахождение координатами (по карте) — «откуда».
+  location?: GeoPoint | null;
+  // Ноль или несколько назначений (координатами) — «куда».
+  destinations: GeoPoint[];
 }
 
 export function getVehicles() {
@@ -148,10 +149,17 @@ export function addVehicle(input: VehicleInput) {
   return api.post<Vehicle>("/fleet", input);
 }
 
-export function updateVehicleLocation(vehicleId: string, currentLocation: string) {
-  return api.patch<Vehicle>(`/fleet/${vehicleId}/location`, {
-    current_location: currentLocation,
-  });
+// null очищает местонахождение.
+export function updateVehicleLocation(vehicleId: string, location: GeoPoint | null) {
+  return api.patch<Vehicle>(`/fleet/${vehicleId}/location`, { location });
+}
+
+export function addVehicleDestination(vehicleId: string, point: GeoPoint) {
+  return api.post<VehicleDestination>(`/fleet/${vehicleId}/destinations`, { point });
+}
+
+export function deleteVehicleDestination(vehicleId: string, destId: string) {
+  return api.del<{ status: string }>(`/fleet/${vehicleId}/destinations/${destId}`);
 }
 
 export function deleteVehicle(vehicleId: string) {

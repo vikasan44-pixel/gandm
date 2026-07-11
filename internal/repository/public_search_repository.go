@@ -59,19 +59,21 @@ func (r *CargoRequestRepository) SearchOpenPublicCargo(ctx context.Context, from
 type VehicleSearchFilter struct {
 	BodyType      string
 	MinCapacityKg float64
+	MinCapacityM3 float64
 	MinLengthM    float64
 	MinWidthM     float64
 	MinHeightM    float64
 	MinAxles      int
-	From          *models.GeoPoint // готов везти ОТКУДА
-	To            *models.GeoPoint // готов везти КУДА
+	From          *models.GeoPoint // местонахождение (откуда)
+	To            *models.GeoPoint // одно из назначений (куда)
 }
 
 // SearchPublicVehicles — транспорт для гостевого поиска: по характеристикам и,
-// опционально, по объявленному направлению (ready_origin/ready_destination)
-// координатами+радиусом. Машины без объявленного направления не попадают в
-// выдачу с фильтром направления — это корректно: публично «по направлению»
-// находятся только те, кто его объявил.
+// опционально, по направлению координатами+радиусом. «Откуда» сверяется с
+// местонахождением машины (location), «куда» — с ЛЮБЫМ из её назначений
+// (EXISTS по vehicle_destinations). Машина без местонахождения не попадёт в
+// выдачу с фильтром «откуда», без назначений — с фильтром «куда»: публично
+// по направлению находятся только те, кто его указал.
 func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleSearchFilter, cnKm, kzKm float64) ([]models.Vehicle, error) {
 	var q strings.Builder
 	q.WriteString(`SELECT ` + vehicleColumns + ` FROM vehicles WHERE TRUE`)
@@ -87,6 +89,9 @@ func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleS
 	if f.MinCapacityKg > 0 {
 		addScalar(` AND capacity_kg >= $%d`, f.MinCapacityKg)
 	}
+	if f.MinCapacityM3 > 0 {
+		addScalar(` AND capacity_m3 >= $%d`, f.MinCapacityM3)
+	}
 	if f.MinLengthM > 0 {
 		addScalar(` AND length_m >= $%d`, f.MinLengthM)
 	}
@@ -100,10 +105,12 @@ func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleS
 		addScalar(` AND axles >= $%d`, f.MinAxles)
 	}
 	if f.From != nil {
-		appendRadiusFilter(&q, &args, f.From, "ready_origin_lat", "ready_origin_lng", "ready_origin_country", cnKm, kzKm)
+		appendRadiusFilter(&q, &args, f.From, "location_lat", "location_lng", "location_country", cnKm, kzKm)
 	}
 	if f.To != nil {
-		appendRadiusFilter(&q, &args, f.To, "ready_destination_lat", "ready_destination_lng", "ready_destination_country", cnKm, kzKm)
+		q.WriteString(` AND EXISTS (SELECT 1 FROM vehicle_destinations d WHERE d.vehicle_id = vehicles.id`)
+		appendRadiusFilter(&q, &args, f.To, "d.lat", "d.lng", "d.country", cnKm, kzKm)
+		q.WriteString(`)`)
 	}
 	q.WriteString(` ORDER BY created_at DESC LIMIT 200`)
 
@@ -121,5 +128,15 @@ func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleS
 		}
 		items = append(items, v)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ptrs := make([]*models.Vehicle, len(items))
+	for i := range items {
+		ptrs[i] = &items[i]
+	}
+	if err := r.attachDestinations(ctx, ptrs); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
