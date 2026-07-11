@@ -8,6 +8,7 @@ import {
   type PublicVehicleCard,
 } from "../../api/public";
 import { ApiError } from "../../api/client";
+import { BODY_TYPE_KEYS, bodyTypeLabel } from "../../utils/bodyType";
 import { t } from "../../i18n";
 import type { GeoPoint } from "../../api/types";
 
@@ -105,11 +106,14 @@ export function LandingSearch() {
         <div className="field-row">
           <label className="field">
             <span className="field__label">{t("landing.search.bodyType")}</span>
-            <input
-              value={bodyType}
-              onChange={(e) => setBodyType(e.target.value)}
-              placeholder={t("landing.search.anyBody")}
-            />
+            <select value={bodyType} onChange={(e) => setBodyType(e.target.value)}>
+              <option value="">{t("landing.search.anyBody")}</option>
+              {BODY_TYPE_KEYS.map((key) => (
+                <option key={key} value={key}>
+                  {t(`fleet.${key}`)}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="field">
             <span className="field__label">{t("landing.search.minCapacity")}</span>
@@ -187,7 +191,7 @@ function TransportCard({ card }: { card: PublicVehicleCard }) {
   return (
     <li className="public-card">
       <div className="public-card__route">
-        {card.body_type} · {card.capacity_kg.toLocaleString("ru-RU")} кг
+        {bodyTypeLabel(card.body_type)} · {card.capacity_kg.toLocaleString("ru-RU")} кг
         {card.capacity_m3 > 0 ? ` · ${card.capacity_m3} м³` : ""} · {card.axles} ос.
       </div>
       <div className="public-card__meta">

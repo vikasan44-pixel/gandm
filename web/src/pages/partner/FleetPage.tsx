@@ -13,17 +13,9 @@ import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
 import { ApiError } from "../../api/client";
 import { GeoPointField } from "../../components/geo/GeoPointField";
+import { BODY_TYPE_KEYS, bodyTypeLabel } from "../../utils/bodyType";
 import { t } from "../../i18n";
 import type { GeoPoint, Vehicle } from "../../api/types";
-
-const BODY_TYPES = [
-  "bodyTented",
-  "bodyFlatbed",
-  "bodyLowboy",
-  "bodyReefer",
-  "bodyContainer",
-  "bodyOther",
-] as const;
 
 // FleetPage — транспорт участника (ТЗ §11.1). Доступ гейтится бэкендом по
 // инструменту manage_fleet: без него список отвечает 403 tool_required, и
@@ -38,7 +30,9 @@ export function FleetPage() {
   const [length, setLength] = useState("");
   const [width, setWidth] = useState("");
   const [height, setHeight] = useState("");
-  const [bodyType, setBodyType] = useState<string>(t("fleet.bodyTented"));
+  // Храним КЛЮЧ кузова, не переведённую строку — чтобы карточка следовала
+  // языку интерфейса.
+  const [bodyType, setBodyType] = useState<string>("bodyTented");
   // Местонахождение (по карте) и назначения — всё опционально.
   const [location, setLocation] = useState<GeoPoint | null>(null);
   const [destinations, setDestinations] = useState<(GeoPoint | null)[]>([]);
@@ -127,8 +121,8 @@ export function FleetPage() {
             <label className="field">
               <span className="field__label">{t("fleet.bodyType")}</span>
               <select value={bodyType} onChange={(e) => setBodyType(e.target.value)}>
-                {BODY_TYPES.map((key) => (
-                  <option key={key} value={t(`fleet.${key}`)}>
+                {BODY_TYPE_KEYS.map((key) => (
+                  <option key={key} value={key}>
                     {t(`fleet.${key}`)}
                   </option>
                 ))}
@@ -221,7 +215,7 @@ function VehicleRow({
     <li className="tool-row">
       <div>
         <div className="tool-row__name">
-          {vehicle.body_type} · {vehicle.capacity_kg.toLocaleString("ru-RU")} кг
+          {bodyTypeLabel(vehicle.body_type)} · {vehicle.capacity_kg.toLocaleString("ru-RU")} кг
           {vehicle.capacity_m3 > 0 ? ` · ${vehicle.capacity_m3} м³` : ""} · {vehicle.axles} ос.
         </div>
         <div className="tool-row__key">
