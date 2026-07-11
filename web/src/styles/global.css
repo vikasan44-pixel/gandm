@@ -1538,3 +1538,66 @@ textarea {
     font-size: 24px;
   }
 }
+
+/* ---------- выбор инструментов (регистрация / мои инструменты) ---------- */
+
+.tools-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+}
+
+.tools-pick__group {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  margin-top: 6px;
+}
+
+.tool-pick {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tool-pick:hover {
+  background: var(--color-bg);
+}
+
+.tool-pick input {
+  margin-top: 3px;
+}
+
+.tool-pick__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+
+.tool-pick__name {
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tool-pick__desc {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.tools-pick__total {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+  margin-top: 4px;
+  font-size: 14px;
+}

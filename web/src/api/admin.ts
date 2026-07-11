@@ -122,6 +122,7 @@ export interface CreateToolInput {
   name: string;
   description: string;
   category: string;
+  price_kzt: number;
 }
 
 export function createTool(input: CreateToolInput) {
@@ -133,6 +134,7 @@ export interface UpdateToolInput {
   description?: string;
   category?: string;
   is_active?: boolean;
+  price_kzt?: number;
 }
 
 export function updateTool(id: string, patch: UpdateToolInput) {

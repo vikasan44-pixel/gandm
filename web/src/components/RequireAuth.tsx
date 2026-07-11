@@ -8,23 +8,12 @@ export function RequireAdmin() {
   return <Outlet />;
 }
 
-export function RequireClient() {
+// RequireMember — единый гейт кабинета: любой авторизованный участник
+// (роли больше нет). Разделы внутри показываются по инструментам.
+export function RequireMember() {
   const { kind, user, isReady } = useAuth();
   if (!isReady) return null;
   if (kind !== "user" || !user) return <Navigate to="/login" replace />;
-  if (user.participant_type !== "client") {
-    return <Navigate to={cabinetPathFor(user)} replace />;
-  }
-  return <Outlet />;
-}
-
-export function RequirePartner() {
-  const { kind, user, isReady } = useAuth();
-  if (!isReady) return null;
-  if (kind !== "user" || !user) return <Navigate to="/login" replace />;
-  if (user.participant_type === "client") {
-    return <Navigate to={cabinetPathFor(user)} replace />;
-  }
   return <Outlet />;
 }
 

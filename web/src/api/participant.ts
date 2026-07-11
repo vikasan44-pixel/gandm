@@ -27,6 +27,7 @@ import type {
   ParticipantRoute,
   Rating,
   SelectOfferResult,
+  Tool,
   UserLoginResponse,
   UserRatingSummary,
 } from "./types";
@@ -39,12 +40,26 @@ export interface RegisterInput {
   email: string;
   phone: string;
   company_name: string;
-  participant_type: string;
   password: string;
+  // Роли больше нет — участник выбирает инструменты сам.
+  tool_ids: string[];
 }
 
 export function registerUser(input: RegisterInput) {
   return api.post<UserLoginResponse>("/register", input);
+}
+
+// Каталог участнических инструментов (публичный) — для экрана регистрации.
+export function getToolCatalog() {
+  return api.get<Tool[]>("/tools/catalog");
+}
+
+export function getMyTools() {
+  return api.get<Tool[]>("/my/tools");
+}
+
+export function setMyTools(toolIds: string[]) {
+  return api.put<Tool[]>("/my/tools", { tool_ids: toolIds });
 }
 
 // uploadRegistrationDocument sends one verification document; requires the

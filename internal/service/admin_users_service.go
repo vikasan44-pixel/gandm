@@ -40,11 +40,11 @@ type CompanyRef struct {
 func (s *AdminService) ListUsers(ctx context.Context, f UserListFilter) ([]models.User, error) {
 	filter := repository.UserFilter{Search: strings.TrimSpace(f.Search)}
 
+	// participant_type — legacy-поле (роли больше нет); фильтр по нему
+	// оставлен для старых данных, произвольное значение просто вернёт
+	// пустой результат.
 	if f.ParticipantType != "" {
 		pt := models.ParticipantType(f.ParticipantType)
-		if !allowedParticipantTypes[pt] {
-			return nil, fmt.Errorf("%w: unknown participant_type", ErrInvalidInput)
-		}
 		filter.ParticipantType = &pt
 	}
 	if f.Status != "" {

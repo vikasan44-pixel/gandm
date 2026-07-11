@@ -36,6 +36,7 @@ function ToolsSection({ tools }: { tools: AsyncState<Tool[]> }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
+  const [price, setPrice] = useState("0");
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -54,6 +55,7 @@ function ToolsSection({ tools }: { tools: AsyncState<Tool[]> }) {
     setName("");
     setDescription("");
     setCategory("");
+    setPrice("0");
   }
 
   async function handleCreate() {
@@ -64,7 +66,13 @@ function ToolsSection({ tools }: { tools: AsyncState<Tool[]> }) {
     setError(null);
     setIsSaving(true);
     try {
-      await createTool({ key: key.trim(), name: name.trim(), description, category });
+      await createTool({
+        key: key.trim(),
+        name: name.trim(),
+        description,
+        category,
+        price_kzt: Number(price) || 0,
+      });
       resetForm();
       setIsCreating(false);
       tools.reload();
@@ -115,6 +123,10 @@ function ToolsSection({ tools }: { tools: AsyncState<Tool[]> }) {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
+          <label className="field">
+            <span className="field__label">{t("tools.priceLabelTool")}</span>
+            <input type="number" min={0} step="any" value={price} onChange={(e) => setPrice(e.target.value)} />
+          </label>
           <button className="btn btn--primary btn--sm" onClick={handleCreate} disabled={isSaving}>
             {t("common.create")}
           </button>
@@ -133,10 +145,23 @@ function ToolsSection({ tools }: { tools: AsyncState<Tool[]> }) {
             {list.map((tool) => (
               <li key={tool.id} className="tool-row">
                 <div>
-                  <div className="tool-row__name">{tool.name}</div>
+                  <div className="tool-row__name">
+                    {tool.name}
+                    <span
+                      className={tool.price_kzt > 0 ? "pill pill--yellow" : "pill pill--green"}
+                      style={{ marginLeft: 8 }}
+                    >
+                      {tool.price_kzt > 0
+                        ? `${tool.price_kzt.toLocaleString("ru-RU")} ₸/${t("register.perMonth")}`
+                        : t("register.free")}
+                    </span>
+                  </div>
                   <div className="tool-row__key">{tool.key}</div>
                   {tool.description && (
                     <div className="tool-row__description">{tool.description}</div>
+                  )}
+                  {tool.category !== "admin" && (
+                    <ToolPriceEditor tool={tool} onSaved={tools.reload} />
                   )}
                 </div>
                 <button
@@ -349,5 +374,38 @@ function ComparisonTable({ tools, sets }: { tools: Tool[]; sets: PermissionSet[]
         </table>
       </div>
     </>
+  );
+}
+
+// ToolPriceEditor — быстрое изменение цены участнического инструмента
+// прямо в списке (админ задаёт ₸/мес; 0 = бесплатный).
+function ToolPriceEditor({ tool, onSaved }: { tool: Tool; onSaved: () => void }) {
+  const [price, setPrice] = useState(String(tool.price_kzt));
+  const [isSaving, setIsSaving] = useState(false);
+
+  async function save() {
+    setIsSaving(true);
+    try {
+      await updateTool(tool.id, { price_kzt: Number(price) || 0 });
+      onSaved();
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="inline-form" style={{ marginTop: 6 }}>
+      <input
+        type="number"
+        min={0}
+        step="any"
+        value={price}
+        onChange={(e) => setPrice(e.target.value)}
+        style={{ maxWidth: 120 }}
+      />
+      <button className="btn btn--ghost btn--sm" onClick={() => void save()} disabled={isSaving}>
+        {isSaving ? t("common.loading") : t("common.save")}
+      </button>
+    </div>
   );
 }

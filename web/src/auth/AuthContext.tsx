@@ -184,10 +184,10 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-// Cabinet selection is presentational routing only — which nav/screens a
-// user sees. It keys off participant_type because that's the only signal
-// available, but it grants nothing: every action is still authorized on the
-// backend via tools, per Block A.
-export function cabinetPathFor(user: User): string {
-  return user.participant_type === "client" ? "/client/cargo" : "/partner/cargo";
+// Роли больше нет — один общий кабинет для всех участников. Разделы внутри
+// показываются по инструментам, которые человек себе выбрал (AppShell
+// фильтрует навигацию по /my/tools). Параметр оставлен для совместимости
+// вызовов.
+export function cabinetPathFor(_user?: User | null): string {
+  return "/app/cargo";
 }

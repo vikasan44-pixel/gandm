@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"gandm/internal/auth"
 	"gandm/internal/httpx"
 	"gandm/internal/models"
@@ -24,11 +26,11 @@ func NewRegisterHandler(svc *service.RegistrationService) *RegisterHandler {
 }
 
 type registerRequest struct {
-	Email           string                 `json:"email"`
-	Phone           string                 `json:"phone"`
-	CompanyName     string                 `json:"company_name"`
-	ParticipantType models.ParticipantType `json:"participant_type"`
-	Password        string                 `json:"password"`
+	Email       string      `json:"email"`
+	Phone       string      `json:"phone"`
+	CompanyName string      `json:"company_name"`
+	Password    string      `json:"password"`
+	ToolIDs     []uuid.UUID `json:"tool_ids"`
 }
 
 type registerResponse struct {
@@ -44,11 +46,11 @@ func (h *RegisterHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, tokens, err := h.svc.Register(r.Context(), service.RegisterInput{
-		Email:           req.Email,
-		Phone:           req.Phone,
-		CompanyName:     req.CompanyName,
-		ParticipantType: req.ParticipantType,
-		Password:        req.Password,
+		Email:       req.Email,
+		Phone:       req.Phone,
+		CompanyName: req.CompanyName,
+		Password:    req.Password,
+		ToolIDs:     req.ToolIDs,
 	})
 	if err != nil {
 		writeServiceError(w, err)

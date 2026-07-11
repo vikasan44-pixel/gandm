@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { Sidebar, type NavItem } from "./Sidebar";
 import { subscribeUnreadCount } from "../../notifications/poller";
 import { useAuth } from "../../auth/AuthContext";
+import { getMyTools } from "../../api/participant";
 import { t } from "../../i18n";
 
 function Shell({ brand, nav }: { brand: string; nav: NavItem[] }) {
@@ -37,34 +38,50 @@ export function AdminShell() {
   return <Shell brand={t("app.title")} nav={nav} />;
 }
 
-export function ClientShell() {
-  const nav: NavItem[] = [
-    { to: "/client/cargo", label: t("nav.myCargo") },
-    { to: "/client/chats", label: t("nav.chats") },
-    { to: "/client/rating", label: t("rating.navLabel") },
-  ];
-  return <Shell brand={t("app.clientTitle")} nav={nav} />;
-}
-
-export function PartnerShell() {
+// MemberShell — единый кабинет участника (роли больше нет). Разделы
+// показываются по инструментам, которые человек себе выбрал; «Подать
+// заявку», «Чаты», «Рейтинг», «Мои инструменты» и «Уведомления» доступны
+// всем. Скрытые в навигации разделы всё равно защищены бэкендом (403).
+export function MemberShell() {
   const [unreadCount, setUnreadCount] = useState(0);
+  const [toolKeys, setToolKeys] = useState<Set<string>>(new Set());
 
-  // The unread badge is fed by the app-wide singleton poller (one interval
-  // per app, 30s, in-flight guard) — see notifications/poller.ts. Subscribe
-  // returns its own cleanup, so unmounting never leaves a stray interval.
   useEffect(() => subscribeUnreadCount(setUnreadCount), []);
+  useEffect(() => {
+    getMyTools()
+      .then((tools) => setToolKeys(new Set(tools.map((tl) => tl.key))))
+      .catch(() => setToolKeys(new Set()));
+  }, []);
+
+  const has = (...keys: string[]) => keys.some((k) => toolKeys.has(k));
 
   const nav: NavItem[] = [
-    { to: "/partner/cargo", label: t("nav.availableCargo") },
-    { to: "/partner/routes", label: t("nav.routes") },
-    { to: "/partner/fill-reports", label: t("fill.navLabel") },
-    { to: "/partner/fleet", label: t("fleet.navLabel") },
-    { to: "/partner/driver-competitions", label: t("driverComp.navLabel") },
-    { to: "/partner/customs", label: t("customs.navLabel") },
-    { to: "/partner/employees", label: t("employees.navLabel") },
-    { to: "/partner/chats", label: t("nav.chats") },
-    { to: "/partner/rating", label: t("rating.navLabel") },
-    { to: "/partner/notifications", label: t("nav.notifications"), badge: unreadCount },
+    { to: "/app/cargo", label: t("nav.myCargo") },
+    ...(has("receive_cargo_by_route", "view_cargo_requests")
+      ? [{ to: "/app/available", label: t("nav.availableCargo") }]
+      : []),
+    ...(has("receive_cargo_by_route")
+      ? [{ to: "/app/routes", label: t("nav.routes") }]
+      : []),
+    ...(has("manage_warehouse_slots", "submit_fill_report")
+      ? [{ to: "/app/fill-reports", label: t("fill.navLabel") }]
+      : []),
+    ...(has("manage_fleet")
+      ? [{ to: "/app/fleet", label: t("fleet.navLabel") }]
+      : []),
+    ...(has("manage_fleet", "manage_warehouse_slots")
+      ? [{ to: "/app/driver-competitions", label: t("driverComp.navLabel") }]
+      : []),
+    ...(has("manage_customs_docs")
+      ? [{ to: "/app/customs", label: t("customs.navLabel") }]
+      : []),
+    ...(has("manage_employees")
+      ? [{ to: "/app/employees", label: t("employees.navLabel") }]
+      : []),
+    { to: "/app/chats", label: t("nav.chats") },
+    { to: "/app/rating", label: t("rating.navLabel") },
+    { to: "/app/my-tools", label: t("myTools.navLabel") },
+    { to: "/app/notifications", label: t("nav.notifications"), badge: unreadCount },
   ];
   return <Shell brand={t("app.partnerTitle")} nav={nav} />;
 }

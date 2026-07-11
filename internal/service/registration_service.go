@@ -30,15 +30,6 @@ var (
 	ErrFileTooLarge       = errors.New("file too large")
 )
 
-var allowedParticipantTypes = map[models.ParticipantType]bool{
-	models.ParticipantClient:     true,
-	models.ParticipantWarehouse:  true,
-	models.ParticipantCarrier:    true,
-	models.ParticipantDriver:     true,
-	models.ParticipantBroker:     true,
-	models.ParticipantCustomsRep: true,
-}
-
 var allowedUserStatuses = map[models.UserStatus]bool{
 	models.UserStatusPending:  true,
 	models.UserStatusActive:   true,
@@ -63,11 +54,14 @@ var allowedDocumentContentTypes = map[string]bool{
 const maxDocumentSize = 15 << 20 // 15 MB
 
 type RegisterInput struct {
-	Email           string
-	Phone           string
-	CompanyName     string
-	ParticipantType models.ParticipantType
-	Password        string
+	Email       string
+	Phone       string
+	CompanyName string
+	Password    string
+	// ToolIDs — инструменты, которые участник выбрал себе при регистрации
+	// (вместо роли). Разрешены только участнические (self-selectable). Роль
+	// как понятие убрана — доступ определяют инструменты.
+	ToolIDs []uuid.UUID
 }
 
 type RegistrationService struct {
@@ -100,11 +94,13 @@ func (s *RegistrationService) Register(ctx context.Context, in RegisterInput) (*
 
 	now := time.Now()
 	user := &models.User{
-		ID:              uuid.New(),
-		Email:           in.Email,
-		Phone:           in.Phone,
-		CompanyName:     in.CompanyName,
-		ParticipantType: in.ParticipantType,
+		ID:          uuid.New(),
+		Email:       in.Email,
+		Phone:       in.Phone,
+		CompanyName: in.CompanyName,
+		// participant_type — legacy-колонка (роли больше нет); заполняем
+		// нейтральным значением, дальше доступ определяют инструменты.
+		ParticipantType: models.ParticipantClient,
 		PasswordHash:    string(passwordHash),
 		Status:          models.UserStatusPending,
 		HasSubscription: false,
@@ -120,9 +116,26 @@ func (s *RegistrationService) Register(ctx context.Context, in RegisterInput) (*
 
 	userRepo := repository.NewUserRepository(tx)
 	verRepo := repository.NewVerificationRepository(tx)
+	toolRepo := repository.NewToolRepository(tx)
 
 	if err := userRepo.Create(ctx, user); err != nil {
 		return nil, auth.TokenPair{}, err
+	}
+
+	// Выбранные при регистрации инструменты: только участнические.
+	if len(in.ToolIDs) > 0 {
+		allowed, err := toolRepo.SelfSelectableIDSet(ctx)
+		if err != nil {
+			return nil, auth.TokenPair{}, err
+		}
+		for _, id := range in.ToolIDs {
+			if !allowed[id] {
+				return nil, auth.TokenPair{}, fmt.Errorf("%w: tool is not self-selectable", ErrInvalidInput)
+			}
+		}
+		if err := toolRepo.ReplaceUserTools(ctx, user.ID, in.ToolIDs); err != nil {
+			return nil, auth.TokenPair{}, err
+		}
 	}
 
 	verification := &models.VerificationRequest{
@@ -156,9 +169,6 @@ func validateRegisterInput(in RegisterInput) error {
 	}
 	if in.CompanyName == "" {
 		return fmt.Errorf("%w: company_name is required", ErrInvalidInput)
-	}
-	if !allowedParticipantTypes[in.ParticipantType] {
-		return fmt.Errorf("%w: unknown participant_type", ErrInvalidInput)
 	}
 	if len(in.Password) < 8 {
 		return fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)

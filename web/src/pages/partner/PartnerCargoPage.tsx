@@ -79,7 +79,7 @@ export function PartnerCargoPage() {
           <div className="state state--empty">
             <p>{noRoutes ? t("partner.noRoutesHint") : t("partner.availableEmpty")}</p>
             {noRoutes && (
-              <Link className="panel__link" to="/partner/routes">
+              <Link className="panel__link" to="/app/routes">
                 {t("partner.goToRoutes")}
               </Link>
             )}

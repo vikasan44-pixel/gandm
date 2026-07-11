@@ -126,8 +126,14 @@ assert_status "Некорректный email" "400" "$STATUS"
 STATUS=$(req POST /register "$(jq -n --arg email "smoke.short.${RAND}@example.com" '{email:$email,phone:"+7000",company_name:"X",participant_type:"client",password:"123"}')")
 assert_status "Слишком короткий пароль" "400" "$STATUS"
 
-STATUS=$(req POST /register "$(jq -n --arg email "smoke.badtype.${RAND}@example.com" '{email:$email,phone:"+7000",company_name:"X",participant_type:"alien",password:"Smoke12345!"}')")
-assert_status "Неизвестный participant_type" "400" "$STATUS"
+# Роли больше нет: participant_type в регистрации игнорируется, участник
+# выбирает инструменты сам. Проверяем публичный каталог инструментов.
+STATUS=$(req GET /tools/catalog "")
+if [ "$STATUS" = "200" ] && jq -e '[.[] | select(.price_kzt == 0)] | length > 0 and (map(.category) | index("admin") | not)' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+  pass "Каталог инструментов: есть бесплатные, нет admin-инструментов"
+else
+  fail "Каталог инструментов вернул неожиданное (HTTP $STATUS)"
+fi
 
 step "4. Загрузка документа (настоящий PNG)"
 PNG_FILE="$TMP_DIR/test.png"

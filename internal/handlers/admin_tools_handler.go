@@ -22,10 +22,11 @@ func (h *AdminHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 }
 
 type createToolRequest struct {
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Category    string `json:"category"`
+	Key         string  `json:"key"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Category    string  `json:"category"`
+	PriceKZT    float64 `json:"price_kzt"`
 }
 
 func (h *AdminHandler) CreateTool(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +47,7 @@ func (h *AdminHandler) CreateTool(w http.ResponseWriter, r *http.Request) {
 		Name:        req.Name,
 		Description: req.Description,
 		Category:    req.Category,
+		PriceKZT:    req.PriceKZT,
 	})
 	if err != nil {
 		writeAdminServiceError(w, err)
@@ -55,10 +57,11 @@ func (h *AdminHandler) CreateTool(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateToolRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	Category    *string `json:"category"`
-	IsActive    *bool   `json:"is_active"`
+	Name        *string  `json:"name"`
+	Description *string  `json:"description"`
+	Category    *string  `json:"category"`
+	IsActive    *bool    `json:"is_active"`
+	PriceKZT    *float64 `json:"price_kzt"`
 }
 
 func (h *AdminHandler) UpdateTool(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +87,7 @@ func (h *AdminHandler) UpdateTool(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 		Category:    req.Category,
 		IsActive:    req.IsActive,
+		PriceKZT:    req.PriceKZT,
 	})
 	if err != nil {
 		writeAdminServiceError(w, err)

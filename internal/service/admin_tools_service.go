@@ -16,6 +16,7 @@ type CreateToolInput struct {
 	Name        string
 	Description string
 	Category    string
+	PriceKZT    float64
 }
 
 type ToolPatch struct {
@@ -23,6 +24,7 @@ type ToolPatch struct {
 	Description *string
 	Category    *string
 	IsActive    *bool
+	PriceKZT    *float64
 }
 
 func (s *AdminService) ListTools(ctx context.Context) ([]models.Tool, error) {
@@ -46,6 +48,9 @@ func (s *AdminService) CreateTool(ctx context.Context, adminID uuid.UUID, in Cre
 	}
 	defer tx.Rollback(ctx)
 
+	if in.PriceKZT < 0 {
+		return nil, fmt.Errorf("%w: price_kzt must be non-negative", ErrInvalidInput)
+	}
 	tool := &models.Tool{
 		ID:          uuid.New(),
 		Key:         in.Key,
@@ -53,6 +58,7 @@ func (s *AdminService) CreateTool(ctx context.Context, adminID uuid.UUID, in Cre
 		Description: in.Description,
 		Category:    in.Category,
 		IsActive:    true,
+		PriceKZT:    in.PriceKZT,
 	}
 
 	toolRepo := repository.NewToolRepository(tx)
@@ -94,6 +100,12 @@ func (s *AdminService) UpdateTool(ctx context.Context, adminID, toolID uuid.UUID
 	}
 	if patch.IsActive != nil {
 		tool.IsActive = *patch.IsActive
+	}
+	if patch.PriceKZT != nil {
+		if *patch.PriceKZT < 0 {
+			return nil, fmt.Errorf("%w: price_kzt must be non-negative", ErrInvalidInput)
+		}
+		tool.PriceKZT = *patch.PriceKZT
 	}
 	if tool.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalidInput)

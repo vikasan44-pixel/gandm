@@ -108,6 +108,9 @@ func main() {
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		})
 
+		// Каталог участнических инструментов — публичный: нужен на экране
+		// регистрации, где человек ещё не авторизован.
+		api.Get("/tools/catalog", cargoHandler.ToolCatalog)
 		api.With(loginLimiter).Post("/register", registerHandler.Register)
 		api.With(loginLimiter).Post("/login", registerHandler.Login)
 		api.With(loginLimiter).Post("/refresh", registerHandler.Refresh)
@@ -117,6 +120,10 @@ func main() {
 			protected.Use(appmiddleware.TouchLastActive(userRepo))
 			protected.Post("/register/documents", registerHandler.UploadDocument)
 			protected.Get("/me", registerHandler.Me)
+
+			// Мои инструменты (без роли): участник сам включает/выключает.
+			protected.Get("/my/tools", cargoHandler.GetMyTools)
+			protected.Put("/my/tools", cargoHandler.SetMyTools)
 
 			// Scaffolding for the tool-based access principle — see
 			// handlers.ToolAccessCheck for why this route exists.

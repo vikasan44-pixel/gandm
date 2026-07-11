@@ -354,7 +354,7 @@ function OffersPanel({
               </dd>
             </div>
           </dl>
-          <Link className="panel__link" to="/client/chats">
+          <Link className="panel__link" to="/app/chats">
             {t("select.goToChat")}
           </Link>
           <FavoriteButton participantId={reveal.participant_id} />
@@ -599,7 +599,7 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
               </div>
             </dl>
           ))}
-          <Link className="panel__link" to="/client/chats">
+          <Link className="panel__link" to="/app/chats">
             {t("consolidation.goToSharedChat")}
           </Link>
         </div>

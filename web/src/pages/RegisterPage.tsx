@@ -1,11 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { cabinetPathFor, useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
-import { uploadRegistrationDocument } from "../api/participant";
+import { getToolCatalog, uploadRegistrationDocument } from "../api/participant";
 import { t } from "../i18n";
+import type { Tool } from "../api/types";
 
-const PARTICIPANT_TYPES = ["client", "warehouse", "carrier", "driver", "broker", "customs_rep"];
 const DOCUMENT_TYPES = [
   "id_card",
   "founding_docs",
@@ -20,9 +20,9 @@ interface UploadedDoc {
   name: string;
 }
 
-// RegisterPage: шаг 1 — данные компании и аккаунт, шаг 2 — загрузка
-// документов на проверку. Аккаунт создаётся сразу (статус pending), сессия
-// применяется — поэтому документы грузятся под собственным токеном.
+// RegisterPage: шаг 1 — данные + выбор инструментов (роли больше нет),
+// шаг 2 — загрузка документов на проверку. Аккаунт создаётся сразу
+// (pending), сессия применяется — документы грузятся под своим токеном.
 export function RegisterPage() {
   const { registerUser, kind, user } = useAuth();
   const navigate = useNavigate();
@@ -30,11 +30,13 @@ export function RegisterPage() {
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [participantType, setParticipantType] = useState("client");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [catalog, setCatalog] = useState<Tool[]>([]);
+  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
 
   const [registered, setRegistered] = useState(false);
   const [docType, setDocType] = useState(DOCUMENT_TYPES[0]);
@@ -43,10 +45,29 @@ export function RegisterPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploaded, setUploaded] = useState<UploadedDoc[]>([]);
 
-  // Уже залогиненный пользователь попадает в свой кабинет — кроме момента,
-  // когда он только что зарегистрировался и грузит документы (registered).
+  useEffect(() => {
+    getToolCatalog().then(setCatalog).catch(() => setCatalog([]));
+  }, []);
+
+  // Уже залогиненный пользователь попадает в кабинет — кроме момента, когда
+  // он только что зарегистрировался и грузит документы (registered).
   if (!registered && kind === "user" && user) {
     return <Navigate to={cabinetPathFor(user)} replace />;
+  }
+
+  const freeTools = catalog.filter((tl) => tl.price_kzt === 0);
+  const paidTools = catalog.filter((tl) => tl.price_kzt > 0);
+  const monthlyTotal = catalog
+    .filter((tl) => selectedTools.has(tl.id) && tl.price_kzt > 0)
+    .reduce((sum, tl) => sum + tl.price_kzt, 0);
+
+  function toggleTool(id: string) {
+    setSelectedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -66,8 +87,8 @@ export function RegisterPage() {
         email,
         phone,
         company_name: companyName,
-        participant_type: participantType,
         password,
+        tool_ids: [...selectedTools],
       });
       setRegistered(true);
     } catch (err) {
@@ -160,12 +181,7 @@ export function RegisterPage() {
         <h1 className="login-card__title">{t("register.title")}</h1>
         <label className="field">
           <span className="field__label">{t("register.companyName")}</span>
-          <input
-            value={companyName}
-            onChange={(e) => setCompanyName(e.target.value)}
-            autoFocus
-            required
-          />
+          <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} autoFocus required />
         </label>
         <label className="field">
           <span className="field__label">{t("register.email")}</span>
@@ -174,16 +190,6 @@ export function RegisterPage() {
         <label className="field">
           <span className="field__label">{t("register.phone")}</span>
           <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required />
-        </label>
-        <label className="field">
-          <span className="field__label">{t("register.participantType")}</span>
-          <select value={participantType} onChange={(e) => setParticipantType(e.target.value)}>
-            {PARTICIPANT_TYPES.map((pt) => (
-              <option key={pt} value={pt}>
-                {t(`participantType.${pt}`)}
-              </option>
-            ))}
-          </select>
         </label>
         <label className="field">
           <span className="field__label">{t("register.password")}</span>
@@ -204,6 +210,38 @@ export function RegisterPage() {
             required
           />
         </label>
+
+        <div className="tools-pick">
+          <span className="field__label">{t("register.toolsTitle")}</span>
+          <p className="register-hint">{t("register.toolsHint")}</p>
+
+          {freeTools.length > 0 && (
+            <>
+              <div className="tools-pick__group">{t("register.toolsFree")}</div>
+              {freeTools.map((tl) => (
+                <ToolCheck key={tl.id} tool={tl} checked={selectedTools.has(tl.id)} onToggle={toggleTool} />
+              ))}
+            </>
+          )}
+          {paidTools.length > 0 && (
+            <>
+              <div className="tools-pick__group">{t("register.toolsPaid")}</div>
+              {paidTools.map((tl) => (
+                <ToolCheck key={tl.id} tool={tl} checked={selectedTools.has(tl.id)} onToggle={toggleTool} />
+              ))}
+            </>
+          )}
+
+          <div className="tools-pick__total">
+            {t("register.monthlyTotal")}:{" "}
+            <strong>
+              {monthlyTotal > 0
+                ? `${monthlyTotal.toLocaleString("ru-RU")} ₸/${t("register.perMonth")}`
+                : t("register.free")}
+            </strong>
+          </div>
+        </div>
+
         {error && <div className="form-error">{error}</div>}
         <button className="btn btn--primary" type="submit" disabled={isSubmitting}>
           {isSubmitting ? t("common.loading") : t("register.submit")}
@@ -213,5 +251,32 @@ export function RegisterPage() {
         </Link>
       </form>
     </div>
+  );
+}
+
+function ToolCheck({
+  tool,
+  checked,
+  onToggle,
+}: {
+  tool: Tool;
+  checked: boolean;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <label className="tool-pick">
+      <input type="checkbox" checked={checked} onChange={() => onToggle(tool.id)} />
+      <span className="tool-pick__body">
+        <span className="tool-pick__name">
+          {tool.name}
+          <span className={tool.price_kzt > 0 ? "pill pill--yellow" : "pill pill--green"}>
+            {tool.price_kzt > 0
+              ? `${tool.price_kzt.toLocaleString("ru-RU")} ₸/${t("register.perMonth")}`
+              : t("register.free")}
+          </span>
+        </span>
+        <span className="tool-pick__desc">{tool.description}</span>
+      </span>
+    </label>
   );
 }

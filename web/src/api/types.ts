@@ -62,6 +62,8 @@ export interface Tool {
   description: string;
   category: string;
   is_active: boolean;
+  // Цена инструмента, ₸/мес; 0 = бесплатный (задаётся админом).
+  price_kzt: number;
 }
 
 export interface PermissionSet {

@@ -24,11 +24,11 @@ func NewToolRepository(db Querier) *ToolRepository {
 	return &ToolRepository{db: db}
 }
 
-const toolColumns = `id, key, name, description, category, is_active`
+const toolColumns = `id, key, name, description, category, is_active, price_kzt`
 
 func scanTool(row pgx.Row) (*models.Tool, error) {
 	var t models.Tool
-	err := row.Scan(&t.ID, &t.Key, &t.Name, &t.Description, &t.Category, &t.IsActive)
+	err := row.Scan(&t.ID, &t.Key, &t.Name, &t.Description, &t.Category, &t.IsActive, &t.PriceKZT)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -39,8 +39,8 @@ func scanTool(row pgx.Row) (*models.Tool, error) {
 }
 
 func (r *ToolRepository) Create(ctx context.Context, t *models.Tool) error {
-	const q = `INSERT INTO tools (id, key, name, description, category, is_active) VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err := r.db.Exec(ctx, q, t.ID, t.Key, t.Name, t.Description, t.Category, t.IsActive)
+	const q = `INSERT INTO tools (id, key, name, description, category, is_active, price_kzt) VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	_, err := r.db.Exec(ctx, q, t.ID, t.Key, t.Name, t.Description, t.Category, t.IsActive, t.PriceKZT)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -56,8 +56,8 @@ func (r *ToolRepository) Create(ctx context.Context, t *models.Tool) error {
 // id so callers (e.g. the seed script) get a stable id to reference.
 func (r *ToolRepository) UpsertByKey(ctx context.Context, t *models.Tool) error {
 	const q = `
-		INSERT INTO tools (id, key, name, description, category, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO tools (id, key, name, description, category, is_active, price_kzt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (key) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
@@ -65,7 +65,7 @@ func (r *ToolRepository) UpsertByKey(ctx context.Context, t *models.Tool) error 
 			is_active = EXCLUDED.is_active
 		RETURNING id
 	`
-	return r.db.QueryRow(ctx, q, t.ID, t.Key, t.Name, t.Description, t.Category, t.IsActive).Scan(&t.ID)
+	return r.db.QueryRow(ctx, q, t.ID, t.Key, t.Name, t.Description, t.Category, t.IsActive, t.PriceKZT).Scan(&t.ID)
 }
 
 func (r *ToolRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Tool, error) {
@@ -74,8 +74,8 @@ func (r *ToolRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Too
 }
 
 func (r *ToolRepository) Update(ctx context.Context, t *models.Tool) error {
-	const q = `UPDATE tools SET name = $2, description = $3, category = $4, is_active = $5 WHERE id = $1`
-	tag, err := r.db.Exec(ctx, q, t.ID, t.Name, t.Description, t.Category, t.IsActive)
+	const q = `UPDATE tools SET name = $2, description = $3, category = $4, is_active = $5, price_kzt = $6 WHERE id = $1`
+	tag, err := r.db.Exec(ctx, q, t.ID, t.Name, t.Description, t.Category, t.IsActive, t.PriceKZT)
 	if err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ func (r *ToolRepository) List(ctx context.Context) ([]models.Tool, error) {
 	tools := make([]models.Tool, 0)
 	for rows.Next() {
 		var t models.Tool
-		if err := rows.Scan(&t.ID, &t.Key, &t.Name, &t.Description, &t.Category, &t.IsActive); err != nil {
+		if err := rows.Scan(&t.ID, &t.Key, &t.Name, &t.Description, &t.Category, &t.IsActive, &t.PriceKZT); err != nil {
 			return nil, err
 		}
 		tools = append(tools, t)
@@ -106,7 +106,7 @@ func (r *ToolRepository) List(ctx context.Context) ([]models.Tool, error) {
 
 func (r *ToolRepository) ListByUserID(ctx context.Context, userID uuid.UUID) ([]models.Tool, error) {
 	const q = `
-		SELECT t.id, t.key, t.name, t.description, t.category, t.is_active
+		SELECT t.id, t.key, t.name, t.description, t.category, t.is_active, t.price_kzt
 		FROM tools t
 		JOIN user_tools ut ON ut.tool_id = t.id
 		WHERE ut.user_id = $1
@@ -121,12 +121,48 @@ func (r *ToolRepository) ListByUserID(ctx context.Context, userID uuid.UUID) ([]
 	tools := make([]models.Tool, 0)
 	for rows.Next() {
 		var t models.Tool
-		if err := rows.Scan(&t.ID, &t.Key, &t.Name, &t.Description, &t.Category, &t.IsActive); err != nil {
+		if err := rows.Scan(&t.ID, &t.Key, &t.Name, &t.Description, &t.Category, &t.IsActive, &t.PriceKZT); err != nil {
 			return nil, err
 		}
 		tools = append(tools, t)
 	}
 	return tools, rows.Err()
+}
+
+// ListSelfSelectable — участнические инструменты, доступные для самовыбора
+// при регистрации и в настройках (всё, кроме служебных admin-инструментов).
+// Только активные.
+func (r *ToolRepository) ListSelfSelectable(ctx context.Context) ([]models.Tool, error) {
+	q := `SELECT ` + toolColumns + ` FROM tools WHERE is_active = true AND category <> 'admin' ORDER BY price_kzt, name`
+	rows, err := r.db.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tools := make([]models.Tool, 0)
+	for rows.Next() {
+		var t models.Tool
+		if err := rows.Scan(&t.ID, &t.Key, &t.Name, &t.Description, &t.Category, &t.IsActive, &t.PriceKZT); err != nil {
+			return nil, err
+		}
+		tools = append(tools, t)
+	}
+	return tools, rows.Err()
+}
+
+// SelfSelectableIDSet returns the ids of self-selectable tools as a set —
+// used to reject admin/inactive tools when a user picks tools for himself.
+func (r *ToolRepository) SelfSelectableIDSet(ctx context.Context) (map[uuid.UUID]bool, error) {
+	tools, err := r.ListSelfSelectable(ctx)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[uuid.UUID]bool, len(tools))
+	for _, t := range tools {
+		set[t.ID] = true
+	}
+	return set, nil
 }
 
 // UserHasTool is the sole access-check primitive: it looks at tool

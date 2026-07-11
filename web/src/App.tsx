@@ -1,12 +1,7 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
-import {
-  HomeRedirect,
-  RequireAdmin,
-  RequireClient,
-  RequirePartner,
-} from "./components/RequireAuth";
-import { AdminShell, ClientShell, PartnerShell } from "./components/layout/AppShell";
+import { HomeRedirect, RequireAdmin, RequireMember } from "./components/RequireAuth";
+import { AdminShell, MemberShell } from "./components/layout/AppShell";
 import { LoginPage } from "./pages/LoginPage";
 import { UserLoginPage } from "./pages/UserLoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -29,6 +24,7 @@ import { FleetPage } from "./pages/partner/FleetPage";
 import { CustomsPage } from "./pages/partner/CustomsPage";
 import { DriverCompetitionsPage } from "./pages/partner/DriverCompetitionsPage";
 import { EmployeesPage } from "./pages/partner/EmployeesPage";
+import { MyToolsPage } from "./pages/MyToolsPage";
 
 export default function App() {
   return (
@@ -51,26 +47,21 @@ export default function App() {
             </Route>
           </Route>
 
-          <Route element={<RequireClient />}>
-            <Route element={<ClientShell />}>
-              <Route path="/client/cargo" element={<ClientCargoPage />} />
-              <Route path="/client/chats" element={<ChatsPage />} />
-              <Route path="/client/rating" element={<RatingPage />} />
-            </Route>
-          </Route>
-
-          <Route element={<RequirePartner />}>
-            <Route element={<PartnerShell />}>
-              <Route path="/partner/cargo" element={<PartnerCargoPage />} />
-              <Route path="/partner/routes" element={<RoutesPage />} />
-              <Route path="/partner/notifications" element={<NotificationsPage />} />
-              <Route path="/partner/chats" element={<ChatsPage />} />
-              <Route path="/partner/rating" element={<RatingPage />} />
-              <Route path="/partner/fill-reports" element={<FillReportsPage />} />
-              <Route path="/partner/fleet" element={<FleetPage />} />
-              <Route path="/partner/driver-competitions" element={<DriverCompetitionsPage />} />
-              <Route path="/partner/customs" element={<CustomsPage />} />
-              <Route path="/partner/employees" element={<EmployeesPage />} />
+          {/* Единый кабинет участника — роли нет, разделы по инструментам. */}
+          <Route element={<RequireMember />}>
+            <Route element={<MemberShell />}>
+              <Route path="/app/cargo" element={<ClientCargoPage />} />
+              <Route path="/app/available" element={<PartnerCargoPage />} />
+              <Route path="/app/routes" element={<RoutesPage />} />
+              <Route path="/app/fill-reports" element={<FillReportsPage />} />
+              <Route path="/app/fleet" element={<FleetPage />} />
+              <Route path="/app/driver-competitions" element={<DriverCompetitionsPage />} />
+              <Route path="/app/customs" element={<CustomsPage />} />
+              <Route path="/app/employees" element={<EmployeesPage />} />
+              <Route path="/app/chats" element={<ChatsPage />} />
+              <Route path="/app/rating" element={<RatingPage />} />
+              <Route path="/app/my-tools" element={<MyToolsPage />} />
+              <Route path="/app/notifications" element={<NotificationsPage />} />
             </Route>
           </Route>
 
