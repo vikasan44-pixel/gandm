@@ -28,6 +28,10 @@ const zh: Dictionary = {
   },
   consolidation: {
     hint: "您的线路上有相似货物——拼货可以更省钱",
+    groupHint: "您的线路上有多个相似货物——组团拼货更省钱",
+    groupMeta: "组内需求数",
+    agreedMeta: "已同意",
+    membersLabel: "已加入",
     otherCargo: "相似货物",
     agree: "同意",
     decline: "拒绝",

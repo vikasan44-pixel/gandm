@@ -29,6 +29,10 @@ const en: Dictionary = {
   },
   consolidation: {
     hint: "A similar cargo shares your route — combine shipments and pay less",
+    groupHint: "Several similar cargos share your route — consolidate as a group and pay less",
+    groupMeta: "Requests in the group",
+    agreedMeta: "agreed",
+    membersLabel: "accepted",
     otherCargo: "Similar cargo",
     agree: "Agree",
     decline: "Decline",

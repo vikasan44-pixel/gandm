@@ -51,6 +51,12 @@ func (s *CargoService) suggestConsolidations(ctx context.Context) error {
 	}
 
 	consRepo := repository.NewConsolidationRepository(s.db)
+	// Распускаем ещё не отвеченные предложения: их грузы возвращаются в пул
+	// и пересобираются с новой заявкой в одну группу побольше (ТЗ §4.2 «два
+	// клиента И БОЛЕЕ» — все, кто влезает, едут вместе, а не парами).
+	if err := consRepo.DeletePendingUnansweredSuggestions(ctx); err != nil {
+		return err
+	}
 	candidates, err := consRepo.ListOpenCargoWithoutActiveSuggestion(ctx)
 	if err != nil {
 		return err
@@ -85,23 +91,29 @@ func (s *CargoService) suggestConsolidations(ctx context.Context) error {
 			continue
 		}
 
-		// Два груза, однажды состоявшие в одном предложении (включая
-		// отклонённое — «каждый едет сам» должно держаться), вместе не
-		// предлагаются снова. Проверяем все пары группы.
-		alreadySuggested := false
-		for i := 0; i < len(cargos) && !alreadySuggested; i++ {
-			for j := i + 1; j < len(cargos); j++ {
-				exists, err := consRepo.ExistsSuggestionForPair(ctx, cargos[i].ID, cargos[j].ID)
+		// Два груза, однажды состоявшие в одном предложении (сохранившемся:
+		// отклонённом «каждый едет сам» или уже создавшем консолидацию),
+		// вместе не предлагаются снова. Отбраковываем ТОЛЬКО такие грузы
+		// внутри группы, а не всю группу — остальные пусть объединяются.
+		kept := make([]models.CargoRequest, 0, len(cargos))
+		for _, cargo := range cargos {
+			conflict := false
+			for _, k := range kept {
+				exists, err := consRepo.ExistsSuggestionForPair(ctx, cargo.ID, k.ID)
 				if err != nil {
 					return err
 				}
 				if exists {
-					alreadySuggested = true
+					conflict = true
 					break
 				}
 			}
+			if !conflict {
+				kept = append(kept, cargo)
+			}
 		}
-		if alreadySuggested {
+		cargos = kept
+		if len(cargos) < 2 {
 			continue
 		}
 

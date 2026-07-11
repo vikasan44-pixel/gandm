@@ -175,6 +175,26 @@ func (r *ConsolidationRepository) HasAcceptance(ctx context.Context, consolidate
 	return ok, err
 }
 
+// DeletePendingUnansweredSuggestions распускает предложения, на которые
+// ещё НИКТО не ответил (status='suggested', все участники pending). Это
+// освобождает их грузы, чтобы новоприбывшая совместимая заявка пересобрала
+// с ними ОДНУ большую группу вместо того, чтобы остаться в стороне.
+// Предложения, где кто-то уже согласился/отказался, не трогаются — группа
+// фиксируется первым же ответом. Отклонённые (declined) сохраняются, чтобы
+// «каждый едет сам» держалось (ExistsSuggestionForPair видит их историю).
+func (r *ConsolidationRepository) DeletePendingUnansweredSuggestions(ctx context.Context) error {
+	const q = `
+		DELETE FROM consolidation_suggestions s
+		WHERE s.status = 'suggested'
+		  AND NOT EXISTS (
+			SELECT 1 FROM consolidation_suggestion_members m
+			WHERE m.suggestion_id = s.id AND m.response <> 'pending'
+		)
+	`
+	_, err := r.db.Exec(ctx, q)
+	return err
+}
+
 // ListOpenCargoWithoutActiveSuggestion returns the matching-service
 // candidate pool: open, non-consolidated cargo requests not already tied up
 // in a pending suggestion.

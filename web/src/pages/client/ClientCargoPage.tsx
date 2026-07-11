@@ -435,7 +435,15 @@ function ConsolidationBlock({
 
   return (
     <div className="consolidation-hint">
-      <p className="consolidation-hint__text">{t("consolidation.hint")}</p>
+      <p className="consolidation-hint__text">
+        {view.members_count > 2 ? t("consolidation.groupHint") : t("consolidation.hint")}
+      </p>
+      {view.members_count > 2 && (
+        <p className="consolidation-hint__meta">
+          {t("consolidation.groupMeta")}: {view.members_count} · {t("consolidation.agreedMeta")}:{" "}
+          {view.agreed_count}
+        </p>
+      )}
       <p className="consolidation-hint__meta">
         {t("consolidation.otherCargo")}: {view.other_volume_m3} м³ · {view.other_weight_kg} кг ·{" "}
         {view.direction_label}
