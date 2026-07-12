@@ -35,10 +35,8 @@ function transformLng(x: number, y: number): number {
   return ret;
 }
 
-export function gcj02ToWgs84(lat: number, lng: number): { lat: number; lng: number } {
-  if (outOfChina(lat, lng)) {
-    return { lat, lng };
-  }
+// offset returns the GCJ-02 shift (dLat, dLng) at a WGS-84 point.
+function offset(lat: number, lng: number): { dLat: number; dLng: number } {
   let dLat = transformLat(lng - 105.0, lat - 35.0);
   let dLng = transformLng(lng - 105.0, lat - 35.0);
   const radLat = (lat / 180.0) * Math.PI;
@@ -47,5 +45,21 @@ export function gcj02ToWgs84(lat: number, lng: number): { lat: number; lng: numb
   const sqrtMagic = Math.sqrt(magic);
   dLat = (dLat * 180.0) / (((A * (1 - EE)) / (magic * sqrtMagic)) * Math.PI);
   dLng = (dLng * 180.0) / ((A / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  return { dLat, dLng };
+}
+
+export function gcj02ToWgs84(lat: number, lng: number): { lat: number; lng: number } {
+  if (outOfChina(lat, lng)) return { lat, lng };
+  const { dLat, dLng } = offset(lat, lng);
   return { lat: lat - dLat, lng: lng - dLng };
+}
+
+// wgs84ToGcj02 is the forward shift — used to place a WGS-84 marker at the
+// right pixel on GCJ-02 (Amap) tiles. Same crude China bbox as the inverse:
+// points outside it (incl. most of Kazakhstan is INSIDE the bbox — a known
+// coarse-approximation limitation) are returned unchanged.
+export function wgs84ToGcj02(lat: number, lng: number): { lat: number; lng: number } {
+  if (outOfChina(lat, lng)) return { lat, lng };
+  const { dLat, dLng } = offset(lat, lng);
+  return { lat: lat + dLat, lng: lng + dLng };
 }

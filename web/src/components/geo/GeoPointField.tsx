@@ -5,6 +5,7 @@ import markerIconUrl from "leaflet/dist/images/marker-icon.png";
 import markerIcon2xUrl from "leaflet/dist/images/marker-icon-2x.png";
 import markerShadowUrl from "leaflet/dist/images/marker-shadow.png";
 import type { GeoPoint } from "../../api/types";
+import { gcj02ToWgs84, wgs84ToGcj02 } from "../../utils/gcj02";
 import { getLocale, t } from "../../i18n";
 
 // Vite doesn't resolve Leaflet's default icon paths — point them at the
@@ -18,15 +19,23 @@ const leafletIcon = L.icon({
 });
 
 const SEARCH_DEBOUNCE_MS = 700;
-const DEFAULT_CENTER: [number, number] = [43.25, 76.9]; // Алматы
+const DEFAULT_CENTER: [number, number] = [43.25, 76.9]; // Алматы (WGS-84)
 
-// CARTO Voyager basemap (OSM data, Voyager style) served over Fastly's global
-// CDN — unlike tile.openstreetmap.org it isn't blocked by the Great Firewall,
-// so the map loads inside China too. Everything is WGS-84, so one picker and
-// one coordinate system worldwide — no Amap, no GCJ-02 conversion.
-const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
-const TILE_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
-const TILE_SUBDOMAINS = "abcd";
+// Primary basemap: CARTO Voyager (OSM data over Fastly). WGS-84.
+const CARTO_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png";
+const CARTO_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
+const CARTO_SUBDOMAINS = "abcd";
+
+// China fallback: CARTO is blocked by the Great Firewall (verified: mainland
+// nodes can't reach basemaps.cartocdn.com). Amap raster tiles load in China
+// with no API key. They are GCJ-02 ("Mars"), so while this layer is active the
+// map's coordinates are treated as GCJ-02 and converted to/from WGS-84 at the
+// marker/click boundary (data is always WGS-84).
+const AMAP_URL =
+  "https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}";
+const AMAP_ATTRIBUTION = "© AutoNavi";
+const AMAP_SUBDOMAINS = "1234";
+const CARTO_FAIL_MS = 6000;
 
 interface SearchResult {
   label: string;
@@ -76,9 +85,10 @@ interface GeoPointFieldProps {
   onChange: (value: GeoPoint | null) => void;
 }
 
-// Address search + map + draggable marker on a single WGS-84 Leaflet map
-// (CARTO Voyager tiles + Nominatim geocoder). Clicking or dragging captures
-// coordinates directly; the label is refined into ru/en/zh asynchronously.
+// Address search + map + draggable marker. CARTO Voyager tiles by default
+// (WGS-84, one coordinate system worldwide); auto-falls back to Amap tiles
+// where CARTO is blocked (China), converting GCJ-02 ↔ WGS-84 only while that
+// layer is active. Clicking/dragging captures coordinates directly.
 export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -88,6 +98,13 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const leafletMapRef = useRef<L.Map | null>(null);
   const leafletMarkerRef = useRef<L.Marker | null>(null);
+  const chinaModeRef = useRef(false);
+  // Bridge for handleResultClick to place a marker via the map effect's
+  // closures (which know the current display coordinate system).
+  const markerApiRef = useRef<{
+    setMarker: (dispLat: number, dispLng: number) => void;
+    toDisplay: (wgsLat: number, wgsLng: number) => { lat: number; lng: number };
+  } | null>(null);
 
   // Latest onChange/value without re-initializing the map on every render.
   const onChangeRef = useRef(onChange);
@@ -138,41 +155,82 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
     if (!mapContainerRef.current) return;
 
     const map = L.map(mapContainerRef.current).setView(DEFAULT_CENTER, 5);
-    L.tileLayer(TILE_URL, {
-      attribution: TILE_ATTRIBUTION,
-      subdomains: TILE_SUBDOMAINS,
+    const carto = L.tileLayer(CARTO_URL, {
+      attribution: CARTO_ATTRIBUTION,
+      subdomains: CARTO_SUBDOMAINS,
       maxZoom: 20,
     }).addTo(map);
 
-    function setMarker(lat: number, lng: number) {
+    // In China mode the map coordinates are GCJ-02; elsewhere they're WGS-84.
+    const toDisplay = (latWgs: number, lngWgs: number) =>
+      chinaModeRef.current ? wgs84ToGcj02(latWgs, lngWgs) : { lat: latWgs, lng: lngWgs };
+    const toWgs = (dispLat: number, dispLng: number) =>
+      chinaModeRef.current ? gcj02ToWgs84(dispLat, dispLng) : { lat: dispLat, lng: dispLng };
+
+    function setMarker(dispLat: number, dispLng: number) {
       if (leafletMarkerRef.current) {
-        leafletMarkerRef.current.setLatLng([lat, lng]);
+        leafletMarkerRef.current.setLatLng([dispLat, dispLng]);
       } else {
-        const marker = L.marker([lat, lng], { draggable: true, icon: leafletIcon }).addTo(map);
+        const marker = L.marker([dispLat, dispLng], { draggable: true, icon: leafletIcon }).addTo(map);
         marker.on("dragend", () => {
           const pos = marker.getLatLng();
-          emitWithMultilang(pos.lat, pos.lng, "");
+          const w = toWgs(pos.lat, pos.lng);
+          emitWithMultilang(w.lat, w.lng, "");
         });
         leafletMarkerRef.current = marker;
       }
     }
 
+    let cartoReachable = false;
+    let switched = false;
+    function switchToChina() {
+      if (switched) return;
+      switched = true;
+      chinaModeRef.current = true;
+      map.removeLayer(carto);
+      L.tileLayer(AMAP_URL, {
+        attribution: AMAP_ATTRIBUTION,
+        subdomains: AMAP_SUBDOMAINS,
+        maxZoom: 18,
+      }).addTo(map);
+      // Re-place the marker/view in GCJ-02 so it aligns with Amap tiles.
+      const v = valueRef.current;
+      const center = v ? wgs84ToGcj02(v.lat, v.lng) : wgs84ToGcj02(DEFAULT_CENTER[0], DEFAULT_CENTER[1]);
+      if (v && leafletMarkerRef.current) leafletMarkerRef.current.setLatLng([center.lat, center.lng]);
+      map.setView([center.lat, center.lng], map.getZoom());
+    }
+
+    carto.on("tileload", () => {
+      cartoReachable = true;
+    });
+    carto.on("tileerror", () => {
+      if (!cartoReachable) switchToChina();
+    });
+    const failTimer = setTimeout(() => {
+      if (!cartoReachable) switchToChina();
+    }, CARTO_FAIL_MS);
+
     map.on("click", (e: L.LeafletMouseEvent) => {
       setMarker(e.latlng.lat, e.latlng.lng);
-      emitWithMultilang(e.latlng.lat, e.latlng.lng, "");
+      const w = toWgs(e.latlng.lat, e.latlng.lng);
+      emitWithMultilang(w.lat, w.lng, "");
     });
 
     const existing = valueRef.current;
     if (existing) {
-      setMarker(existing.lat, existing.lng);
-      map.setView([existing.lat, existing.lng], 10);
+      const d = toDisplay(existing.lat, existing.lng);
+      setMarker(d.lat, d.lng);
+      map.setView([d.lat, d.lng], 10);
     }
 
     leafletMapRef.current = map;
+    markerApiRef.current = { setMarker, toDisplay };
     return () => {
+      clearTimeout(failTimer);
       map.remove();
       leafletMapRef.current = null;
       leafletMarkerRef.current = null;
+      markerApiRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -220,19 +278,12 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
   function handleResultClick(result: SearchResult) {
     setResults([]);
     setQuery("");
-    leafletMapRef.current?.setView([result.lat, result.lng], 11);
-    if (leafletMarkerRef.current) {
-      leafletMarkerRef.current.setLatLng([result.lat, result.lng]);
-    } else if (leafletMapRef.current) {
-      const marker = L.marker([result.lat, result.lng], {
-        draggable: true,
-        icon: leafletIcon,
-      }).addTo(leafletMapRef.current);
-      marker.on("dragend", () => {
-        const pos = marker.getLatLng();
-        emitWithMultilang(pos.lat, pos.lng, "");
-      });
-      leafletMarkerRef.current = marker;
+    const map = leafletMapRef.current;
+    const api = markerApiRef.current;
+    if (map && api) {
+      const d = api.toDisplay(result.lat, result.lng);
+      map.setView([d.lat, d.lng], 11);
+      api.setMarker(d.lat, d.lng);
     }
     emitWithMultilang(result.lat, result.lng, result.country, result.label);
   }
