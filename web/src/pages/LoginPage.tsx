@@ -3,10 +3,12 @@ import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
+import { useSeo } from "../utils/seo";
 
 export function LoginPage() {
   const { loginAdmin, kind } = useAuth();
   const navigate = useNavigate();
+  useSeo({ title: t("login.title"), noindex: true });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);

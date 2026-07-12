@@ -65,7 +65,10 @@ export default function App() {
             </Route>
           </Route>
 
+          {/* Лендинг на трёх адресах для SEO (язык из URL, см. i18n). */}
           <Route path="/" element={<LandingPage />} />
+          <Route path="/en" element={<LandingPage />} />
+          <Route path="/zh" element={<LandingPage />} />
           <Route path="*" element={<HomeRedirect />} />
         </Routes>
       </BrowserRouter>

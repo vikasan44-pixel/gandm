@@ -6,6 +6,11 @@ const en: Dictionary = {
     clientTitle: "Client cabinet",
     partnerTitle: "Participant cabinet",
   },
+  notFound: {
+    title: "Page not found",
+    text: "This page does not exist or has been moved.",
+    back: "Back to home",
+  },
   nav: {
     dashboard: "Dashboard",
     verification: "Verification",

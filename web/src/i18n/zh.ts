@@ -6,6 +6,11 @@ const zh: Dictionary = {
     clientTitle: "客户中心",
     partnerTitle: "参与方中心",
   },
+  notFound: {
+    title: "页面未找到",
+    text: "该页面不存在或已被移动。",
+    back: "返回首页",
+  },
   nav: {
     dashboard: "仪表盘",
     verification: "资质审核",

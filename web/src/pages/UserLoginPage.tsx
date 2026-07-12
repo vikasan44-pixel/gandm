@@ -4,10 +4,12 @@ import { cabinetPathFor, useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
 import { LocaleSwitcher } from "../components/common/LocaleSwitcher";
 import { t } from "../i18n";
+import { useSeo } from "../utils/seo";
 
 export function UserLoginPage() {
   const { loginUser, kind, user } = useAuth();
   const navigate = useNavigate();
+  useSeo({ title: t("login.userTitle"), noindex: true });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);

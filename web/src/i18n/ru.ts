@@ -4,6 +4,11 @@ const ru = {
     clientTitle: "Кабинет клиента",
     partnerTitle: "Кабинет участника",
   },
+  notFound: {
+    title: "Страница не найдена",
+    text: "Такой страницы нет или она была перемещена.",
+    back: "На главную",
+  },
   nav: {
     dashboard: "Дашборд",
     verification: "Верификация",

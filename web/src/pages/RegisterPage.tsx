@@ -4,6 +4,7 @@ import { cabinetPathFor, useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
 import { getToolCatalog, uploadRegistrationDocument } from "../api/participant";
 import { t } from "../i18n";
+import { useSeo } from "../utils/seo";
 import type { Tool } from "../api/types";
 
 const DOCUMENT_TYPES = [
@@ -26,6 +27,7 @@ interface UploadedDoc {
 export function RegisterPage() {
   const { registerUser, kind, user } = useAuth();
   const navigate = useNavigate();
+  useSeo({ title: t("register.title"), noindex: true });
 
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");

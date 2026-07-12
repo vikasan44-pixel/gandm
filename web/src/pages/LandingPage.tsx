@@ -3,17 +3,19 @@ import { cabinetPathFor, useAuth } from "../auth/AuthContext";
 import { LocaleSwitcher } from "../components/common/LocaleSwitcher";
 import { LandingSearch } from "../components/landing/LandingSearch";
 import { t } from "../i18n";
+import { useSeo } from "../utils/seo";
 
 // Гостевая страница: рекламирует, что человек может делать на платформе, и
 // ведёт на регистрацию/вход. Залогиненных сразу уводит в их кабинет.
 export function LandingPage() {
   const { kind, user, isReady } = useAuth();
+  useSeo({ title: t("landing.heroTitle"), description: t("landing.heroSubtitle") });
   if (!isReady) return null;
   if (kind === "admin") return <Navigate to="/admin/dashboard" replace />;
   if (kind === "user" && user) return <Navigate to={cabinetPathFor(user)} replace />;
 
   return (
-    <div className="landing">
+    <main className="landing">
       <LocaleSwitcher />
       <header className="landing__hero">
         <h1 className="landing__title">{t("landing.heroTitle")}</h1>
@@ -67,6 +69,6 @@ export function LandingPage() {
       </section>
 
       <footer className="landing__trust">{t("landing.trustNote")}</footer>
-    </div>
+    </main>
   );
 }

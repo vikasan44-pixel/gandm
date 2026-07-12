@@ -9,6 +9,24 @@
       content="Платформа, где груз сам находит склад, перевозчика и лучшую цену. Поиск грузов и транспорта по направлению."
     />
 
+    <!-- Open Graph (превью ссылок в соцсетях и мессенджерах) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="GANDM" />
+    <meta property="og:title" content="GANDM — грузы и транспорт находят друг друга" />
+    <meta
+      property="og:description"
+      content="Платформа, где груз сам находит склад, перевозчика и лучшую цену. Поиск грузов и транспорта по направлению."
+    />
+    <meta property="og:locale" content="ru_RU" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="GANDM — грузы и транспорт находят друг друга" />
+    <meta
+      name="twitter:description"
+      content="Платформа, где груз сам находит склад, перевозчика и лучшую цену. Поиск грузов и транспорта по направлению."
+    />
+
     <!-- PWA -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#bd5b3a" />
@@ -19,6 +37,70 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="GANDM" />
+
+    <!-- Абсолютные URL (canonical, og:image) и язык документа проставляются от
+         текущего домена в рантайме: домен нигде не хардкодится, поэтому нельзя
+         задать неверный canonical при деплое на другой хост. Прогрессивное
+         улучшение — без JS страница остаётся полностью валидной. -->
+    <script>
+      (function () {
+        try {
+          var origin = window.location.origin;
+          var path = window.location.pathname;
+          // Язык документа: на лендинге — из адреса (/en, /zh), иначе из
+          // сохранённого выбора. Должен совпадать с языком контента (t()).
+          var pth = path.replace(/\/+$/, "");
+          var loc = pth === "/en" ? "en" : pth === "/zh" ? "zh" : localStorage.getItem("gandm_locale");
+          if (loc === "en" || loc === "zh" || loc === "ru") {
+            document.documentElement.lang = loc;
+          }
+          function setMeta(attr, key, val) {
+            var el = document.head.querySelector("meta[" + attr + '="' + key + '"]');
+            if (!el) {
+              el = document.createElement("meta");
+              el.setAttribute(attr, key);
+              document.head.appendChild(el);
+            }
+            el.setAttribute("content", val);
+          }
+          var canonical = document.head.querySelector('link[rel="canonical"]');
+          if (!canonical) {
+            canonical = document.createElement("link");
+            canonical.setAttribute("rel", "canonical");
+            document.head.appendChild(canonical);
+          }
+          canonical.setAttribute("href", origin + path);
+          // hreflang: три языковые версии лендинга + x-default (ru).
+          [["ru", "/"], ["en", "/en"], ["zh", "/zh"], ["x-default", "/"]].forEach(
+            function (pair) {
+              if (document.head.querySelector('link[rel="alternate"][hreflang="' + pair[0] + '"]')) return;
+              var alt = document.createElement("link");
+              alt.setAttribute("rel", "alternate");
+              alt.setAttribute("hreflang", pair[0]);
+              alt.setAttribute("href", origin + pair[1]);
+              document.head.appendChild(alt);
+            }
+          );
+          var img = origin + "/icons/icon-512.png";
+          setMeta("property", "og:url", origin + path);
+          setMeta("property", "og:image", img);
+          setMeta("name", "twitter:image", img);
+          var ld = {
+            "@context": "https://schema.org",
+            "@graph": [
+              { "@type": "Organization", name: "GANDM", url: origin, logo: img },
+              { "@type": "WebSite", name: "GANDM", url: origin }
+            ]
+          };
+          var s = document.createElement("script");
+          s.type = "application/ld+json";
+          s.text = JSON.stringify(ld);
+          document.head.appendChild(s);
+        } catch (e) {
+          /* SEO-обвязка не критична — приложение работает и без неё */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

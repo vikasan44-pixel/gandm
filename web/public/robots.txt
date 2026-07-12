@@ -1,0 +1,12 @@
+# robots.txt — правила обхода для поисковых роботов.
+# ВНИМАНИЕ: перед деплоем замените REPLACE-WITH-YOUR-DOMAIN на реальный домен
+# (строка Sitemap требует абсолютный URL).
+
+User-agent: *
+Allow: /$
+Allow: /login
+Allow: /register
+Disallow: /app/
+Disallow: /admin/
+
+Sitemap: https://REPLACE-WITH-YOUR-DOMAIN/sitemap.xml
