@@ -5,8 +5,8 @@
 //  • навигации: network-first с откатом на закэшированную оболочку (офлайн);
 //  • статика того же origin: stale-while-revalidate (быстро + само обновляется);
 //  • при активации подчищаем старые версии кэша.
-const CACHE = "gandm-shell-v1";
-const SHELL = ["/", "/favicon.svg", "/manifest.webmanifest", "/icons/icon-192.png"];
+const CACHE = "gandm-shell-v3";
+const SHELL = ["/", "/en", "/zh", "/favicon.svg", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -27,6 +27,13 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // A worker left behind by a production preview must never cache Vite dev
+  // modules. This also makes local recovery immediate after the worker file
+  // updates, instead of stale-while-revalidate returning an old interface.
+  if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
+    return;
+  }
+
   // Только GET того же origin проходит через кэш; всё остальное (POST, /api,
   // сторонние тайлы карт/геокодер) — напрямую в сеть.
   if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {
@@ -35,8 +42,11 @@ self.addEventListener("fetch", (event) => {
 
   // Навигации: свежая версия из сети, при офлайне — закэшированная оболочка.
   if (request.mode === "navigate") {
+	const localeShell = url.pathname === "/en" || url.pathname.startsWith("/en/")
+	  ? "/en"
+	  : url.pathname === "/zh" || url.pathname.startsWith("/zh/") ? "/zh" : "/";
     event.respondWith(
-      fetch(request).catch(() => caches.match("/", { ignoreSearch: true }).then((r) => r || caches.match("/")))
+	  fetch(request).catch(() => caches.match(localeShell, { ignoreSearch: true }).then((r) => r || caches.match("/")))
     );
     return;
   }

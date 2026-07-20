@@ -827,7 +827,7 @@ else
 fi
 
 # --- Этап 5: консолидация ---------------------------------------------------
-# Требуется запущенный Python-сервис: cd matching && uvicorn main:app --port 8000
+# Требуется запущенный Python-сервис: cd matching && python3 main.py --port 8000
 
 # cargo_body lat1 lng1 label1 lat2 lng2 label2 volume weight desc
 cargo_body() {
@@ -849,7 +849,7 @@ step "34. Консолидация: Python-сервис доступен, нас
 if curl -sf "${MATCHING_SERVICE_URL:-http://localhost:8000}/health" >/dev/null 2>&1; then
   pass "Matching-сервис отвечает на /health"
 else
-  fail "Matching-сервис НЕ запущен. Запустите: cd matching && uvicorn main:app --port 8000 — и повторите smoke"
+  fail "Matching-сервис НЕ запущен. Запустите: cd matching && python3 main.py --port 8000 — и повторите smoke"
 fi
 
 if [ -n "$ADMIN_TOKEN" ]; then
@@ -1247,58 +1247,8 @@ else
   fail "Пропущено — нет токенов A/B или CARGO_ID"
 fi
 
-step "46. Заполняемость: склад отправляет отчёт с фото"
-TOKEN_W=""
-WAREHOUSE_ID=""
-STATUS=$(req POST /login '{"email":"warehouse.active@example.com","password":"Test12345!"}')
-assert_status "Логин тестового склада" "200" "$STATUS"
-if [ "$STATUS" = "200" ]; then
-  TOKEN_W="$(jq -r '.tokens.access_token // empty' "$TMP_DIR/resp.json")"
-  WAREHOUSE_ID="$(jq -r '.user.id // empty' "$TMP_DIR/resp.json")"
-fi
-
-if [ -n "$TOKEN_W" ] && [ -s "$PNG_FILE" ]; then
-  STATUS=$(curl -s -o "$TMP_DIR/resp.json" -w '%{http_code}' -X POST "$BASE_URL/warehouse/fill-report" \
-    -H "Authorization: Bearer $TOKEN_W" \
-    -F "expected_fill_percent=70" \
-    -F "actual_fill_percent=55" \
-    -F "report_date=$(date +%Y-%m-%d)" \
-    -F "photo=@${PNG_FILE};type=image/png" 2>/dev/null || echo "000")
-  assert_status "POST /warehouse/fill-report с фото" "201" "$STATUS"
-  if [ "$STATUS" = "201" ] && jq -e '.photo_view_url != null' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
-    pass "Ответ содержит presigned-ссылку на фото"
-  else
-    fail "В ответе отчёта нет photo_view_url"
-  fi
-
-  STATUS=$(req GET /warehouse/fill-reports "" "$TOKEN_W")
-  if [ "$STATUS" = "200" ] && jq -e 'length >= 1' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
-    pass "История отчётов склада не пуста"
-  else
-    fail "GET /warehouse/fill-reports (HTTP $STATUS) пуст"
-  fi
-else
-  fail "Пропущено — нет токена склада или тестового PNG"
-fi
-
-step "47. Последний отчёт публично виден; не-склад отправить не может"
-if [ -n "$WAREHOUSE_ID" ] && [ -n "$TOKEN_A" ]; then
-  STATUS=$(req GET "/users/$WAREHOUSE_ID/fill-report" "" "$TOKEN_A")
-  if [ "$STATUS" = "200" ] && jq -e '.actual_fill_percent == 55 and .expected_fill_percent == 70' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
-    pass "GET /users/:id/fill-report возвращает последний отчёт (70/55)"
-  else
-    fail "GET /users/:id/fill-report (HTTP $STATUS): нет ожидаемых значений"
-  fi
-
-  STATUS=$(curl -s -o "$TMP_DIR/resp.json" -w '%{http_code}' -X POST "$BASE_URL/warehouse/fill-report" \
-    -H "Authorization: Bearer $TOKEN_A" \
-    -F "expected_fill_percent=10" \
-    -F "actual_fill_percent=10" \
-    -F "report_date=$(date +%Y-%m-%d)" 2>/dev/null || echo "000")
-  assert_status "Fill-report от участника без инструмента склада" "403" "$STATUS"
-else
-  fail "Пропущено — нет warehouse_id или токена клиента"
-fi
+# Отчёты о заполняемости были выведены из активного продукта миграцией 000044.
+# Их устаревшие endpoints остаются только для совместимости и не входят в smoke.
 
 step "Итоги"
 TOTAL=$((PASS_COUNT + FAIL_COUNT))

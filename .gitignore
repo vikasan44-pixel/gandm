@@ -6,6 +6,15 @@ web/.env
 # Build artifacts
 /bin/
 web/dist/
+# Throwaway verification drivers built into the repo root (go build ./cmd/xxx).
+/ph3check
+/proposalcheck
+/whoffercheck
+/nplus1check
+/ratescheck
+/funcaudit
+/matchcheck
+/authcheck
 
 # Dependencies
 node_modules/

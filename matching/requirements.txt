@@ -1,2 +1,1 @@
-fastapi==0.115.0
-uvicorn==0.30.6
+# No third-party runtime dependencies. The service uses Python's standard library.
