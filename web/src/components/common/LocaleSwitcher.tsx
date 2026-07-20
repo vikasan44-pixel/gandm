@@ -8,6 +8,7 @@ export function LocaleSwitcher() {
     <div className="locale-switcher">
       {LOCALES.map((l) => (
         <button
+          type="button"
           key={l.code}
           className={
             "locale-switcher__btn" + (l.code === current ? " locale-switcher__btn--active" : "")

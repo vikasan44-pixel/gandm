@@ -52,9 +52,12 @@ export function setLocale(locale: Locale) {
 }
 
 export function t(path: string): string {
+	return translate(getLocale(), path);
+}
+
+export function translate(locale: Locale, path: string): string {
   const parts = path.split(".");
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let node: any = dictionaries[getLocale()];
+  let node: any = dictionaries[locale];
   for (const part of parts) {
     node = node?.[part];
   }
