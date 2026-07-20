@@ -11,17 +11,167 @@ import (
 
 	"github.com/google/uuid"
 
+	"gandm/internal/geo"
 	"gandm/internal/models"
 	"gandm/internal/repository"
 )
 
 var (
-	ErrAlreadyResponded = errors.New("consolidation suggestion already responded to")
+	ErrAlreadyResponded           = errors.New("consolidation suggestion already responded to")
+	ErrConsolidationRouteMismatch = errors.New("cargo route does not match this consolidation")
 	// Default capacity limits used only if the platform_settings rows are
 	// missing (they're seeded by migration 000021).
 	defaultMaxVolumeM3 = 90.0
 	defaultMaxWeightKg = 20000.0
 )
+
+// consolidationWindow is how long members have to accept a consolidation
+// suggestion before it resolves with whoever agreed (ТЗ: 3 часа).
+const consolidationWindow = 3 * time.Hour
+
+// ResolveExpiredConsolidations resolves suggestions whose response window has
+// elapsed. Called periodically by a background sweep; each suggestion resolves
+// in its own transaction under a row lock, safe alongside live member replies.
+func (s *CargoService) ResolveExpiredConsolidations(ctx context.Context) error {
+	ids, err := repository.NewConsolidationRepository(s.db).ListExpiredSuggestedIDs(ctx, time.Now())
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := s.resolveExpiredSuggestion(ctx, id); err != nil {
+			log.Printf("resolve expired consolidation %s: %v", id, err)
+		}
+	}
+	return nil
+}
+
+func (s *CargoService) resolveExpiredSuggestion(ctx context.Context, id uuid.UUID) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	consRepo := repository.NewConsolidationRepository(tx)
+	suggestion, err := consRepo.GetSuggestionByIDForUpdate(ctx, id)
+	if err != nil {
+		return err
+	}
+	if suggestion.Status != models.ConsolidationSuggested || time.Now().Before(suggestion.ResolvesAt) {
+		return tx.Commit(ctx) // already resolved, or no longer expired
+	}
+	members, err := consRepo.ListSuggestionMembers(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.resolveSuggestionIfReady(ctx, tx, suggestion, members); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *CargoService) cargoMatchesConsolidation(cargo *models.CargoRequest, cons *models.ConsolidatedRequest) bool {
+	radius := s.cfg.MatchRadiusKZKm
+	if s.cfg.MatchRadiusCNKm > radius {
+		radius = s.cfg.MatchRadiusCNKm
+	}
+	return geo.HaversineKm(cargo.Origin.Lat, cargo.Origin.Lng, cons.Origin.Lat, cons.Origin.Lng) <= radius &&
+		geo.HaversineKm(cargo.Destination.Lat, cargo.Destination.Lng, cons.Destination.Lat, cons.Destination.Lng) <= radius
+}
+
+// RequestJoinConsolidation lets a client whose matching cargo missed the window
+// join an existing open consolidation: the cargo joins, totals grow, the cargo
+// closes, and warehouses that already offered are asked to re-quote.
+func (s *CargoService) RequestJoinConsolidation(ctx context.Context, clientID, consolidatedID, cargoID uuid.UUID) (*models.ConsolidatedRequest, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	cargoRepo := repository.NewCargoRequestRepository(tx)
+	cargo, err := cargoRepo.GetByIDForUpdate(ctx, cargoID)
+	if err != nil {
+		return nil, err
+	}
+	if cargo.ClientID != clientID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if cargo.Status != models.CargoRequestOpen {
+		return nil, ErrCargoNotOpen
+	}
+
+	consRepo := repository.NewConsolidationRepository(tx)
+	cons, err := consRepo.GetConsolidatedByIDForUpdate(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	if cons.Status != models.CargoRequestOpen {
+		return nil, ErrCargoNotOpen
+	}
+	selected, err := repository.NewWarehouseOfferRepository(tx).HasSelectedForConsolidated(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	if selected {
+		return nil, ErrCargoNotOpen
+	}
+	if !s.cargoMatchesConsolidation(cargo, cons) {
+		return nil, ErrConsolidationRouteMismatch
+	}
+
+	if err := consRepo.AddMemberToConsolidated(ctx, consolidatedID, cargoID, cargo.VolumeM3, cargo.WeightKg); err != nil {
+		return nil, err
+	}
+	if err := cargoRepo.UpdateStatus(ctx, cargoID, models.CargoRequestClosed); err != nil {
+		return nil, err
+	}
+
+	// Volume grew — ask warehouses that offered to recalculate.
+	whs, err := repository.NewWarehouseOfferRepository(tx).ListWarehouseIDsByConsolidated(ctx, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	for _, wh := range whs {
+		if err := s.notifyWarehouseConsolidation(ctx, tx, wh.OwnerID, cons, "consolidation_volume_increased"); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.notifyConsolidatedMembers(ctx, tx, consolidatedID, cons, "consolidation_member_joined"); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return repository.NewConsolidationRepository(s.db).GetConsolidatedByID(ctx, consolidatedID)
+}
+
+// ListMatchingConsolidationsForCargo returns open consolidations the client's
+// open cargo could late-join (route within radius, not already a member).
+func (s *CargoService) ListMatchingConsolidationsForCargo(ctx context.Context, clientID, cargoID uuid.UUID) ([]models.ConsolidatedRequest, error) {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
+	cargo, err := repository.NewCargoRequestRepository(s.db).GetByID(ctx, cargoID)
+	if err != nil {
+		return nil, err
+	}
+	if cargo.ClientID != clientID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if cargo.Status != models.CargoRequestOpen {
+		return []models.ConsolidatedRequest{}, nil
+	}
+	radius := s.cfg.MatchRadiusKZKm
+	if s.cfg.MatchRadiusCNKm > radius {
+		radius = s.cfg.MatchRadiusCNKm
+	}
+	return repository.NewConsolidationRepository(s.db).ListOpenMatchingCargoRoute(ctx, clientID, cargo.Origin, cargo.Destination, radius)
+}
 
 // getCapacityLimits reads the consolidation capacity limits from the DB on
 // every call — admins edit them at runtime, no restart required.
@@ -122,6 +272,7 @@ func (s *CargoService) suggestConsolidations(ctx context.Context) error {
 			DirectionLabel: cargos[0].Origin.Label + " → " + cargos[0].Destination.Label,
 			Status:         models.ConsolidationSuggested,
 			CreatedAt:      time.Now(),
+			ResolvesAt:     time.Now().Add(consolidationWindow),
 		}
 		if err := consRepo.CreateSuggestion(ctx, suggestion); err != nil {
 			return err
@@ -258,7 +409,12 @@ func (s *CargoService) respondConsolidation(ctx context.Context, q repository.Qu
 	}
 
 	consRepo := repository.NewConsolidationRepository(q)
-	suggestion, err := consRepo.GetSuggestionByID(ctx, suggestionID)
+	// Row lock on the suggestion: two members answering at the same time are
+	// serialized here, so the second transaction re-reads the members below
+	// AFTER the first has committed its answer. Without it both saw a stale
+	// "everyone else still pending" snapshot and each parked in "wait for the
+	// rest", leaving the group agreed-but-never-consolidated forever.
+	suggestion, err := consRepo.GetSuggestionByIDForUpdate(ctx, suggestionID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -298,11 +454,15 @@ func (s *CargoService) resolveSuggestionIfReady(ctx context.Context, tx reposito
 			agreed++
 		}
 	}
-	if pending > 0 && agreed+pending >= 2 {
-		return nil // ждём остальных
+	// Wait for the others only while the response window is still open. Once it
+	// closes (resolves_at passed), resolve with whoever agreed — the rest may
+	// late-join the created consolidation afterwards.
+	if pending > 0 && agreed+pending >= 2 && time.Now().Before(suggestion.ResolvesAt) {
+		return nil // ждём остальных, пока окно не истекло
 	}
 
 	consRepo := repository.NewConsolidationRepository(tx)
+	suggestion.Status = models.ConsolidationDeclined
 	if agreed >= 2 {
 		agreedMembers := make([]models.SuggestionMember, 0, agreed)
 		for _, m := range members {
@@ -310,12 +470,16 @@ func (s *CargoService) resolveSuggestionIfReady(ctx context.Context, tx reposito
 				agreedMembers = append(agreedMembers, m)
 			}
 		}
-		if err := s.createConsolidatedFromMembers(ctx, tx, suggestion, agreedMembers); err != nil {
+		// createConsolidatedFromMembers may drop members that are no longer
+		// open; if fewer than two survive it creates nothing and reports
+		// created=false, so the suggestion is closed as declined.
+		created, err := s.createConsolidatedFromMembers(ctx, tx, suggestion, agreedMembers)
+		if err != nil {
 			return err
 		}
-		suggestion.Status = models.ConsolidationBothAgreed
-	} else {
-		suggestion.Status = models.ConsolidationDeclined
+		if created {
+			suggestion.Status = models.ConsolidationBothAgreed
+		}
 	}
 	return consRepo.UpdateSuggestionStatus(ctx, suggestion.ID, suggestion.Status)
 }
@@ -358,24 +522,38 @@ func (s *CargoService) AgreeConsolidation(ctx context.Context, clientID, cargoID
 	return suggestion, nil
 }
 
-// createConsolidatedFromMembers merges the agreed member requests: sums
-// volume/weight, takes points from the first cargo (все в радиусе якоря по
-// построению), closes the members and opens the shared competition.
-func (s *CargoService) createConsolidatedFromMembers(ctx context.Context, tx repository.Querier, suggestion *models.ConsolidationSuggestion, agreed []models.SuggestionMember) error {
+// createConsolidatedFromMembers merges the still-open agreed member requests:
+// sums volume/weight, takes points from the first cargo (все в радиусе якоря по
+// построению), closes the members and opens the shared competition. Returns
+// created=false (without touching anything) when fewer than two members remain
+// open, so the caller can close the suggestion as declined.
+func (s *CargoService) createConsolidatedFromMembers(ctx context.Context, tx repository.Querier, suggestion *models.ConsolidationSuggestion, agreed []models.SuggestionMember) (bool, error) {
 	cargoRepo := repository.NewCargoRequestRepository(tx)
 
 	cargos := make([]*models.CargoRequest, 0, len(agreed))
 	memberIDs := make([]uuid.UUID, 0, len(agreed))
 	totalVolume, totalWeight := 0.0, 0.0
 	for _, m := range agreed {
-		cargo, err := cargoRepo.GetByID(ctx, m.CargoRequestID)
+		// Row lock + status re-check inside the transaction: a member whose
+		// own competition has meanwhile closed (matched carrier) is NOT open
+		// anymore and must be skipped — otherwise the UpdateStatus(Closed)
+		// below would silently wipe out that already-signed deal.
+		cargo, err := cargoRepo.GetByIDForUpdate(ctx, m.CargoRequestID)
 		if err != nil {
-			return err
+			return false, err
+		}
+		if cargo.Status != models.CargoRequestOpen {
+			continue
 		}
 		cargos = append(cargos, cargo)
 		memberIDs = append(memberIDs, cargo.ID)
 		totalVolume += cargo.VolumeM3
 		totalWeight += cargo.WeightKg
+	}
+
+	// The group can no longer form: not enough members are still open.
+	if len(cargos) < 2 {
+		return false, nil
 	}
 
 	consolidated := &models.ConsolidatedRequest{
@@ -391,14 +569,14 @@ func (s *CargoService) createConsolidatedFromMembers(ctx context.Context, tx rep
 
 	consRepo := repository.NewConsolidationRepository(tx)
 	if err := consRepo.CreateConsolidated(ctx, consolidated); err != nil {
-		return err
+		return false, err
 	}
 
 	notifRepo := repository.NewNotificationRepository(tx)
 	for _, cargo := range cargos {
 		// Member requests leave the individual competition.
 		if err := cargoRepo.UpdateStatus(ctx, cargo.ID, models.CargoRequestClosed); err != nil {
-			return err
+			return false, err
 		}
 		payload, err := json.Marshal(map[string]any{
 			"consolidated_request_id": consolidated.ID,
@@ -406,7 +584,7 @@ func (s *CargoService) createConsolidatedFromMembers(ctx context.Context, tx rep
 			"direction_label":         suggestion.DirectionLabel,
 		})
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := notifRepo.Create(ctx, &models.Notification{
 			ID:        uuid.New(),
@@ -416,10 +594,15 @@ func (s *CargoService) createConsolidatedFromMembers(ctx context.Context, tx rep
 			IsRead:    false,
 			CreatedAt: time.Now(),
 		}); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+
+	// Broadcast the new consolidation to warehouses that can collect it.
+	if err := s.notifyMatchingWarehousesOnConsolidation(ctx, tx, consolidated); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // DeclineConsolidation: отказавшийся выходит из группы; остальные ждут
@@ -496,23 +679,32 @@ func (s *CargoService) CreateConsolidatedOffer(ctx context.Context, participantI
 	if consolidated.Status != models.CargoRequestOpen {
 		return nil, ErrCargoNotOpen
 	}
+	isMember, err := consRepo.IsConsolidatedMember(ctx, participantID, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	if isMember {
+		return nil, fmt.Errorf("%w: cannot submit an offer to your own consolidated cargo request", ErrInvalidInput)
+	}
+
+	currency, err := s.resolveCurrency(in.Currency)
+	if err != nil {
+		return nil, err
+	}
 
 	offer := &models.Offer{
 		ID:                    uuid.New(),
 		ConsolidatedRequestID: &consolidatedID,
 		ParticipantID:         participantID,
 		Price:                 in.Price,
-		Currency:              "KZT",
+		Currency:              currency,
 		Conditions:            in.Conditions,
 		WarehouseFillPercent:  in.WarehouseFillPercent,
 		Status:                models.OfferSubmitted,
 		CreatedAt:             time.Now(),
 	}
 	offerRepo := repository.NewOfferRepository(s.db)
-	if err := offerRepo.Create(ctx, offer); err != nil {
-		return nil, err
-	}
-	return offer, nil
+	return offerRepo.CreateOrUpdateSubmitted(ctx, offer)
 }
 
 // ListConsolidatedOffersForClient: any member client sees the shared

@@ -127,6 +127,7 @@ func (h *CargoHandler) CreateConsolidatedOffer(w http.ResponseWriter, r *http.Re
 
 	offer, err := h.svc.CreateConsolidatedOffer(r.Context(), userID, consolidatedID, service.CreateOfferInput{
 		Price:                req.Price,
+		Currency:             req.Currency,
 		Conditions:           req.Conditions,
 		WarehouseFillPercent: req.WarehouseFillPercent,
 	})

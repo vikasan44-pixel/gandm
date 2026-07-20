@@ -26,6 +26,9 @@ type ConsolidationSuggestion struct {
 	DirectionLabel string              `json:"direction_label"`
 	Status         ConsolidationStatus `json:"status"`
 	CreatedAt      time.Time           `json:"created_at"`
+	// ResolvesAt is when the response window closes; after it the suggestion is
+	// resolved with whoever agreed even if others never answered.
+	ResolvesAt time.Time `json:"resolves_at"`
 }
 
 type SuggestionResponse string

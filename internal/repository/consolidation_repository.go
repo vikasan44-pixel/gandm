@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,11 +23,11 @@ func NewConsolidationRepository(db Querier) *ConsolidationRepository {
 	return &ConsolidationRepository{db: db}
 }
 
-const suggestionColumns = `id, direction_label, status, created_at`
+const suggestionColumns = `id, direction_label, status, created_at, resolves_at`
 
 func scanSuggestion(row pgx.Row) (*models.ConsolidationSuggestion, error) {
 	var s models.ConsolidationSuggestion
-	err := row.Scan(&s.ID, &s.DirectionLabel, &s.Status, &s.CreatedAt)
+	err := row.Scan(&s.ID, &s.DirectionLabel, &s.Status, &s.CreatedAt, &s.ResolvesAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -38,11 +39,30 @@ func scanSuggestion(row pgx.Row) (*models.ConsolidationSuggestion, error) {
 
 func (r *ConsolidationRepository) CreateSuggestion(ctx context.Context, s *models.ConsolidationSuggestion) error {
 	const q = `
-		INSERT INTO consolidation_suggestions (id, direction_label, status, created_at)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO consolidation_suggestions (id, direction_label, status, created_at, resolves_at)
+		VALUES ($1, $2, $3, $4, $5)
 	`
-	_, err := r.db.Exec(ctx, q, s.ID, s.DirectionLabel, s.Status, s.CreatedAt)
+	_, err := r.db.Exec(ctx, q, s.ID, s.DirectionLabel, s.Status, s.CreatedAt, s.ResolvesAt)
 	return err
+}
+
+// ListExpiredSuggestedIDs returns suggestions whose response window has closed
+// but that are still open — the background sweep resolves them.
+func (r *ConsolidationRepository) ListExpiredSuggestedIDs(ctx context.Context, now time.Time) ([]uuid.UUID, error) {
+	rows, err := r.db.Query(ctx, `SELECT id FROM consolidation_suggestions WHERE status = 'suggested' AND resolves_at <= $1`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (r *ConsolidationRepository) GetSuggestionByID(ctx context.Context, id uuid.UUID) (*models.ConsolidationSuggestion, error) {
@@ -50,11 +70,20 @@ func (r *ConsolidationRepository) GetSuggestionByID(ctx context.Context, id uuid
 	return scanSuggestion(r.db.QueryRow(ctx, q, id))
 }
 
+// GetSuggestionByIDForUpdate is GetSuggestionByID with a row lock —
+// serializes concurrent responses to the same suggestion so each responder
+// reads the others' committed answers before deciding whether the group is
+// ready. Only meaningful when the repository wraps a transaction.
+func (r *ConsolidationRepository) GetSuggestionByIDForUpdate(ctx context.Context, id uuid.UUID) (*models.ConsolidationSuggestion, error) {
+	q := `SELECT ` + suggestionColumns + ` FROM consolidation_suggestions WHERE id = $1 FOR UPDATE`
+	return scanSuggestion(r.db.QueryRow(ctx, q, id))
+}
+
 // GetActiveSuggestionByCargoID returns the pending suggestion (not yet
 // resolved either way) that involves the given cargo request, if any.
 func (r *ConsolidationRepository) GetActiveSuggestionByCargoID(ctx context.Context, cargoID uuid.UUID) (*models.ConsolidationSuggestion, error) {
 	q := `
-		SELECT s.id, s.direction_label, s.status, s.created_at
+		SELECT s.id, s.direction_label, s.status, s.created_at, s.resolves_at
 		FROM consolidation_suggestions s
 		JOIN consolidation_suggestion_members m ON m.suggestion_id = s.id
 		WHERE m.cargo_request_id = $1
@@ -213,14 +242,14 @@ func (r *ConsolidationRepository) ListOpenCargoWithoutActiveSuggestion(ctx conte
 	return queryCargoRequests(ctx, r.db, q)
 }
 
-const consolidatedColumns = `id, origin_lat, origin_lng, origin_label, origin_country, destination_lat, destination_lng, destination_label, destination_country, total_volume_m3, total_weight_kg, member_request_ids, status, invite_status, initiator_client_id, invited_client_id, chat_id, created_at`
+const consolidatedColumns = `id, origin_lat, origin_lng, origin_label, origin_country, origin_labels, destination_lat, destination_lng, destination_label, destination_country, destination_labels, total_volume_m3, total_weight_kg, member_request_ids, status, invite_status, initiator_client_id, invited_client_id, chat_id, created_at`
 
 func scanConsolidatedFields(row pgx.Row, c *models.ConsolidatedRequest) error {
-	var memberIDs []byte
+	var memberIDs, originLabels, destinationLabels []byte
 	err := row.Scan(
 		&c.ID,
-		&c.Origin.Lat, &c.Origin.Lng, &c.Origin.Label, &c.Origin.Country,
-		&c.Destination.Lat, &c.Destination.Lng, &c.Destination.Label, &c.Destination.Country,
+		&c.Origin.Lat, &c.Origin.Lng, &c.Origin.Label, &c.Origin.Country, &originLabels,
+		&c.Destination.Lat, &c.Destination.Lng, &c.Destination.Label, &c.Destination.Country, &destinationLabels,
 		&c.TotalVolumeM3, &c.TotalWeightKg, &memberIDs, &c.Status,
 		&c.InviteStatus, &c.InitiatorClientID, &c.InvitedClientID, &c.ChatID,
 		&c.CreatedAt,
@@ -228,6 +257,8 @@ func scanConsolidatedFields(row pgx.Row, c *models.ConsolidatedRequest) error {
 	if err != nil {
 		return err
 	}
+	c.Origin.Labels = scanLabels(originLabels)
+	c.Destination.Labels = scanLabels(destinationLabels)
 	return json.Unmarshal(memberIDs, &c.MemberRequestIDs)
 }
 
@@ -238,18 +269,39 @@ func (r *ConsolidationRepository) CreateConsolidated(ctx context.Context, c *mod
 	}
 	const q = `
 		INSERT INTO consolidated_requests (
-			id, origin_lat, origin_lng, origin_label, origin_country,
-			destination_lat, destination_lng, destination_label, destination_country,
+			id, origin_lat, origin_lng, origin_label, origin_country, origin_labels,
+			destination_lat, destination_lng, destination_label, destination_country, destination_labels,
 			total_volume_m3, total_weight_kg, member_request_ids, status, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 	_, err = r.db.Exec(ctx, q,
-		c.ID, c.Origin.Lat, c.Origin.Lng, c.Origin.Label, c.Origin.Country,
-		c.Destination.Lat, c.Destination.Lng, c.Destination.Label, c.Destination.Country,
+		c.ID, c.Origin.Lat, c.Origin.Lng, c.Origin.Label, c.Origin.Country, marshalLabels(c.Origin.Labels),
+		c.Destination.Lat, c.Destination.Lng, c.Destination.Label, c.Destination.Country, marshalLabels(c.Destination.Labels),
 		c.TotalVolumeM3, c.TotalWeightKg, memberIDs, c.Status, c.CreatedAt,
 	)
 	return err
+}
+
+// AddMemberToConsolidated appends a cargo to an open consolidation and bumps
+// its totals (late join). The status='open' guard makes it a no-op once the
+// consolidation is closed/matched.
+func (r *ConsolidationRepository) AddMemberToConsolidated(ctx context.Context, consolidatedID, cargoID uuid.UUID, addVolume, addWeight float64) error {
+	const q = `
+		UPDATE consolidated_requests
+		SET member_request_ids = member_request_ids || to_jsonb($2::text),
+		    total_volume_m3 = total_volume_m3 + $3,
+		    total_weight_kg = total_weight_kg + $4
+		WHERE id = $1 AND status = 'open'
+	`
+	tag, err := r.db.Exec(ctx, q, consolidatedID, cargoID.String(), addVolume, addWeight)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *ConsolidationRepository) GetConsolidatedByID(ctx context.Context, id uuid.UUID) (*models.ConsolidatedRequest, error) {
@@ -316,7 +368,17 @@ func (r *ConsolidationRepository) ListOpenConsolidatedMatchingUserRoutes(ctx con
 	q := `
 		SELECT ` + consolidatedColumns + `
 		FROM consolidated_requests cr
-		WHERE cr.status = 'open' AND EXISTS (
+			WHERE cr.status = 'open'
+			  AND NOT EXISTS (
+				SELECT 1 FROM warehouse_offers wo
+				WHERE wo.consolidated_request_id = cr.id AND wo.status = 'selected'
+			  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM cargo_requests own_cargo
+			WHERE own_cargo.client_id = $1
+			  AND cr.member_request_ids @> to_jsonb(own_cargo.id::text)
+		  )
+		  AND EXISTS (
 			SELECT 1 FROM participant_routes pr
 			WHERE pr.user_id = $1
 			  -- Широтная полоса (sargable) до haversine: индекс из миграции
@@ -380,12 +442,11 @@ func (r *ConsolidationRepository) UpdateConsolidatedStatus(ctx context.Context, 
 	return nil
 }
 
-// ListMemberDescriptions returns the cargo descriptions («наименования
-// грузов») of the consolidation members — the packing-list preview shown to
-// customs representatives, deliberately free of any personal data (ТЗ §10.2).
-func (r *ConsolidationRepository) ListMemberDescriptions(ctx context.Context, consolidatedID uuid.UUID) ([]string, error) {
+// ListMemberCargoItems returns structured, translatable categories plus the
+// author's optional original description, without any personal data.
+func (r *ConsolidationRepository) ListMemberCargoItems(ctx context.Context, consolidatedID uuid.UUID) ([]models.CargoItemSummary, error) {
 	const q = `
-		SELECT c.description
+		SELECT c.category, c.description
 		FROM consolidated_requests cr
 		JOIN cargo_requests c ON cr.member_request_ids @> to_jsonb(c.id::text)
 		WHERE cr.id = $1
@@ -397,13 +458,13 @@ func (r *ConsolidationRepository) ListMemberDescriptions(ctx context.Context, co
 	}
 	defer rows.Close()
 
-	items := make([]string, 0, 2)
+	items := make([]models.CargoItemSummary, 0, 2)
 	for rows.Next() {
-		var d string
-		if err := rows.Scan(&d); err != nil {
+		var item models.CargoItemSummary
+		if err := rows.Scan(&item.Category, &item.Description); err != nil {
 			return nil, err
 		}
-		items = append(items, d)
+		items = append(items, item)
 	}
 	return items, rows.Err()
 }
@@ -505,6 +566,60 @@ func (r *ConsolidationRepository) ListSelections(ctx context.Context, consolidat
 		items = append(items, s)
 	}
 	return items, rows.Err()
+}
+
+// ListOpenMatchingCargoRoute returns open consolidations whose origin AND
+// destination are within radiusKm of the cargo's endpoints, excluding those the
+// client already belongs to — the late-join candidates for a cargo.
+func (r *ConsolidationRepository) ListOpenMatchingCargoRoute(ctx context.Context, clientID uuid.UUID, origin, destination models.GeoPoint, radiusKm float64) ([]models.ConsolidatedRequest, error) {
+	q := `
+		SELECT ` + consolidatedColumns + `
+			FROM consolidated_requests cr
+			WHERE cr.status = 'open'
+			  AND NOT EXISTS (
+				SELECT 1 FROM warehouse_offers wo
+				WHERE wo.consolidated_request_id = cr.id AND wo.status = 'selected'
+			  )
+			  AND haversine_km($2::float8, $3::float8, cr.origin_lat, cr.origin_lng) <= $6::float8
+		  AND haversine_km($4::float8, $5::float8, cr.destination_lat, cr.destination_lng) <= $6::float8
+		  AND NOT EXISTS (
+			SELECT 1 FROM cargo_requests own
+			WHERE own.client_id = $1 AND cr.member_request_ids @> to_jsonb(own.id::text)
+		  )
+		ORDER BY cr.created_at DESC
+	`
+	return r.queryConsolidated(ctx, q, clientID, origin.Lat, origin.Lng, destination.Lat, destination.Lng, radiusKm)
+}
+
+// ListOpenMatchingOwnerWarehouses returns open consolidated requests that one
+// of the owner's published, pickup-enabled warehouses can collect (consolidated
+// origin within that warehouse's pickup_radius_km of its address).
+func (r *ConsolidationRepository) ListOpenMatchingOwnerWarehouses(ctx context.Context, ownerID uuid.UUID, dispatchRadiusKm float64) ([]models.ConsolidatedRequest, error) {
+	q := `
+		SELECT ` + consolidatedColumns + `
+		FROM consolidated_requests cr
+			WHERE cr.status = 'open'
+			  AND NOT EXISTS (
+				SELECT 1 FROM warehouse_offers wo
+				WHERE wo.consolidated_request_id = cr.id AND wo.status = 'selected'
+			  )
+			  AND EXISTS (
+			SELECT 1 FROM warehouses w
+			WHERE w.user_id = $1 AND w.status = 'published' AND w.pickup_enabled = true
+			  AND (
+				haversine_km(cr.origin_lat, cr.origin_lng, (w.address->>'lat')::float8, (w.address->>'lng')::float8) <= w.pickup_radius_km
+				OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(w.pickup_cities, 'null'::jsonb), '[]'::jsonb)) pc
+				           WHERE haversine_km(cr.origin_lat, cr.origin_lng, (pc->>'lat')::float8, (pc->>'lng')::float8) <= w.pickup_radius_km)
+			  )
+			  AND (
+				jsonb_array_length(COALESCE(NULLIF(w.dispatch_routes, 'null'::jsonb), '[]'::jsonb)) = 0
+				OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(w.dispatch_routes, 'null'::jsonb), '[]'::jsonb)) dr
+				           WHERE haversine_km(cr.destination_lat, cr.destination_lng, (dr->'destination'->>'lat')::float8, (dr->'destination'->>'lng')::float8) <= $2::float8)
+			  )
+		)
+		ORDER BY cr.created_at DESC
+	`
+	return r.queryConsolidated(ctx, q, ownerID, dispatchRadiusKm)
 }
 
 func (r *ConsolidationRepository) queryConsolidated(ctx context.Context, q string, args ...any) ([]models.ConsolidatedRequest, error) {

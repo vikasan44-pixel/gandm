@@ -99,7 +99,29 @@ func (s *CargoService) PayConsolidated(ctx context.Context, clientID, consolidat
 	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
 		return nil, err
 	}
-	cons, err := s.getConsolidatedForMember(ctx, s.db, clientID, consolidatedID)
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	consRepo := repository.NewConsolidationRepository(tx)
+	isMember, err := consRepo.IsConsolidatedMember(ctx, clientID, consolidatedID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, repository.ErrNotFound
+	}
+	// Row lock serializes concurrent pay attempts (double-click / retries):
+	// the second one blocks here until the first commits, then the HasPayment
+	// guard below sees the recorded payment and returns without charging
+	// again. Charging before persisting was the double-charge bug — real money
+	// left twice, only one row survived the unique constraint.
+	// (For a slow real provider, move to an idempotency-key + pending-row
+	// pattern so the network call doesn't run while holding this lock.)
+	cons, err := consRepo.GetConsolidatedByIDForUpdate(ctx, consolidatedID)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +130,12 @@ func (s *CargoService) PayConsolidated(ctx context.Context, clientID, consolidat
 	}
 	if cons.InitiatorClientID != nil && *cons.InitiatorClientID == clientID {
 		return nil, ErrNotInvitedClient
+	}
+
+	if paid, err := consRepo.HasPayment(ctx, consolidatedID, clientID); err != nil {
+		return nil, err
+	} else if paid {
+		return nil, repository.ErrAlreadyPaid
 	}
 
 	ref, err := s.payments.Charge(ctx, clientID, "consolidation:"+consolidatedID.String())
@@ -123,8 +151,10 @@ func (s *CargoService) PayConsolidated(ctx context.Context, clientID, consolidat
 		ProviderRef:           ref,
 		CreatedAt:             time.Now(),
 	}
-	consRepo := repository.NewConsolidationRepository(s.db)
 	if err := consRepo.CreatePayment(ctx, paymentRow); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return paymentRow, nil
@@ -349,13 +379,22 @@ func (s *CargoService) GetConsolidatedStatus(ctx context.Context, clientID, cons
 		}
 	}
 	if callerAccepted {
+		// Batch-load the other accepted clients in one query, preserving their
+		// acceptance order, instead of a GetByID per member.
+		otherIDs := make([]uuid.UUID, 0, len(acceptedIDs))
 		for _, id := range acceptedIDs {
-			if id == clientID {
-				continue
+			if id != clientID {
+				otherIDs = append(otherIDs, id)
 			}
-			other, err := userRepo.GetByID(ctx, id)
-			if err != nil {
-				return nil, err
+		}
+		others, err := userRepo.ListByIDs(ctx, otherIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range otherIDs {
+			other := others[id]
+			if other == nil {
+				return nil, repository.ErrNotFound
 			}
 			view.Counterparts = append(view.Counterparts, ClientContact{
 				CompanyName: other.CompanyName, Email: other.Email, Phone: other.Phone,
@@ -470,6 +509,9 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 	if offer.ConsolidatedRequestID == nil || *offer.ConsolidatedRequestID != consolidatedID {
 		return nil, fmt.Errorf("%w: offer does not belong to this consolidated request", ErrInvalidInput)
 	}
+	if offer.Status != models.OfferSubmitted {
+		return nil, ErrOfferNotEditable
+	}
 
 	if err := consRepo.UpsertSelection(ctx, &models.ConsolidatedSelection{
 		ConsolidatedRequestID: consolidatedID,
@@ -496,7 +538,7 @@ func (s *CargoService) SelectConsolidatedOffer(ctx context.Context, clientID, co
 		if err != nil {
 			return nil, err
 		}
-		if err := offerRepo.UpdateStatus(ctx, winner.ID, models.OfferSelected); err != nil {
+		if err := offerRepo.MarkSelectedForConsolidated(ctx, consolidatedID, winner.ID); err != nil {
 			return nil, err
 		}
 		if err := consRepo.UpdateConsolidatedStatus(ctx, consolidatedID, models.CargoRequestMatched); err != nil {
