@@ -12,6 +12,7 @@ const (
 	OfferSubmitted OfferStatus = "submitted"
 	OfferSelected  OfferStatus = "selected"
 	OfferRejected  OfferStatus = "rejected"
+	OfferWithdrawn OfferStatus = "withdrawn"
 )
 
 // Offer targets exactly one of: a single cargo request or a consolidated

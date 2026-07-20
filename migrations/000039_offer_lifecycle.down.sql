@@ -1,0 +1,2 @@
+-- PostgreSQL enum values are intentionally not removed in a down migration:
+-- deleting an enum value safely requires rebuilding every dependent column.

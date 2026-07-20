@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"gandm/internal/geo"
 	"gandm/internal/models"
 )
 
@@ -40,10 +43,14 @@ func appendRadiusFilter(q *strings.Builder, args *[]any, p *models.GeoPoint, lat
 // from/to опциональны: указана только точка «откуда» — фильтр по origin,
 // только «куда» — по destination, обе — по обеим. Возвращает не более 200
 // свежих записей. Анонимизацию (срез client_id/description) делает сервис.
-func (r *CargoRequestRepository) SearchOpenPublicCargo(ctx context.Context, from, to *models.GeoPoint, cnKm, kzKm float64) ([]models.CargoRequest, error) {
+func (r *CargoRequestRepository) SearchOpenPublicCargo(ctx context.Context, from, to *models.GeoPoint, excludeClientID *uuid.UUID, cnKm, kzKm float64) ([]models.CargoRequest, error) {
 	var q strings.Builder
 	q.WriteString(`SELECT ` + cargoRequestColumns + ` FROM cargo_requests cr WHERE cr.status = 'open'`)
 	args := []any{}
+	if excludeClientID != nil {
+		args = append(args, *excludeClientID)
+		fmt.Fprintf(&q, ` AND cr.client_id <> $%d`, len(args))
+	}
 	if from != nil {
 		appendRadiusFilter(&q, &args, from, "cr.origin_lat", "cr.origin_lng", "cr.origin_country", cnKm, kzKm)
 	}
@@ -74,14 +81,19 @@ type VehicleSearchFilter struct {
 // (EXISTS по vehicle_destinations). Машина без местонахождения не попадёт в
 // выдачу с фильтром «откуда», без назначений — с фильтром «куда»: публично
 // по направлению находятся только те, кто его указал.
-func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleSearchFilter, cnKm, kzKm float64) ([]models.Vehicle, error) {
+func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleSearchFilter, excludeUserID *uuid.UUID, cnKm, kzKm float64) ([]models.Vehicle, error) {
 	var q strings.Builder
-	q.WriteString(`SELECT ` + vehicleColumns + ` FROM vehicles WHERE TRUE`)
+	q.WriteString(`SELECT ` + vehicleColumns + ` FROM vehicles WHERE EXISTS (
+		SELECT 1 FROM users owner WHERE owner.id = vehicles.user_id AND owner.status = 'active'
+	)`)
 	args := []any{}
 
 	addScalar := func(cond string, val any) {
 		args = append(args, val)
 		fmt.Fprintf(&q, cond, len(args))
+	}
+	if excludeUserID != nil {
+		addScalar(` AND user_id <> $%d`, *excludeUserID)
 	}
 	if f.BodyType != "" {
 		addScalar(` AND body_type = $%d`, f.BodyType)
@@ -104,15 +116,10 @@ func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleS
 	if f.MinAxles > 0 {
 		addScalar(` AND axles >= $%d`, f.MinAxles)
 	}
-	if f.From != nil {
-		appendRadiusFilter(&q, &args, f.From, "location_lat", "location_lng", "location_country", cnKm, kzKm)
-	}
-	if f.To != nil {
-		q.WriteString(` AND EXISTS (SELECT 1 FROM vehicle_destinations d WHERE d.vehicle_id = vehicles.id`)
-		appendRadiusFilter(&q, &args, f.To, "d.lat", "d.lng", "d.country", cnKm, kzKm)
-		q.WriteString(`)`)
-	}
-	q.WriteString(` ORDER BY created_at DESC LIMIT 200`)
+	// Direction matching is finalized after active trips are attached. This
+	// allows ordered waypoint matching (pickup point must occur before the
+	// delivery point) without duplicating JSON route logic in SQL.
+	q.WriteString(` ORDER BY created_at DESC LIMIT 1000`)
 
 	rows, err := r.db.Query(ctx, q.String(), args...)
 	if err != nil {
@@ -138,5 +145,150 @@ func (r *VehicleRepository) SearchPublicVehicles(ctx context.Context, f VehicleS
 	if err := r.attachDestinations(ctx, ptrs); err != nil {
 		return nil, err
 	}
-	return items, nil
+	if err := r.attachTrips(ctx, ptrs); err != nil {
+		return nil, err
+	}
+	if err := r.attachVerificationSummary(ctx, ptrs); err != nil {
+		return nil, err
+	}
+	matched := make([]models.Vehicle, 0, len(items))
+	for _, vehicle := range items {
+		searchableTrips := searchableVehicleTrips(vehicle.Trips)
+		if len(searchableTrips) > 0 {
+			for _, trip := range searchableTrips {
+				if !tripMatchesDirection(trip, f.From, f.To) {
+					continue
+				}
+				if f.MinCapacityKg > 0 && vehicle.CapacityKg-trip.LoadedWeightKg < f.MinCapacityKg {
+					continue
+				}
+				if f.MinCapacityM3 > 0 && vehicle.CapacityM3-trip.LoadedVolumeM3 < f.MinCapacityM3 {
+					continue
+				}
+				candidate := vehicle
+				candidate.Trips = []models.VehicleTrip{trip}
+				matched = append(matched, candidate)
+				if len(matched) == 200 {
+					return matched, nil
+				}
+			}
+			continue
+		}
+
+		if !vehicleMatchesLegacyDirection(vehicle, f.From, f.To, cnKm, kzKm) {
+			continue
+		}
+		matched = append(matched, vehicle)
+		if len(matched) == 200 {
+			break
+		}
+	}
+	return matched, nil
+}
+
+func committedVehicleTrip(trips []models.VehicleTrip) *models.VehicleTrip {
+	for index := range trips {
+		if trips[index].HasActiveCargo() {
+			return &trips[index]
+		}
+	}
+	return nil
+}
+
+func searchableVehicleTrips(trips []models.VehicleTrip) []models.VehicleTrip {
+	if committed := committedVehicleTrip(trips); committed != nil {
+		return []models.VehicleTrip{*committed}
+	}
+	plans := make([]models.VehicleTrip, 0, len(trips))
+	for _, trip := range trips {
+		if trip.Status == models.VehicleTripPlanned {
+			plans = append(plans, trip)
+		}
+	}
+	return plans
+}
+
+func tripMatchesDirection(trip models.VehicleTrip, from, to *models.GeoPoint) bool {
+	if from == nil && to == nil {
+		return true
+	}
+	radius := 50.0
+	points := []models.GeoPoint{trip.Origin}
+	if trip.CanPickupEnRoute {
+		points = append(points, trip.Waypoints...)
+	}
+	points = append(points, trip.Destination)
+	if from != nil && to != nil {
+		for fromIndex, point := range points {
+			if !pointNear(point, from, radius) {
+				continue
+			}
+			for toIndex := fromIndex + 1; toIndex < len(points); toIndex++ {
+				if pointNear(points[toIndex], to, radius) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if from != nil {
+		for index, point := range points {
+			if index < len(points)-1 && pointNear(point, from, radius) {
+				return true
+			}
+		}
+		return false
+	}
+	for index := 1; index < len(points); index++ {
+		if pointNear(points[index], to, radius) {
+			return true
+		}
+	}
+	return false
+}
+
+func pointRadiusKm(left, right models.GeoPoint, cnKm, kzKm float64) float64 {
+	if strings.EqualFold(left.Country, "cn") || strings.EqualFold(right.Country, "cn") {
+		return cnKm
+	}
+	return kzKm
+}
+
+func pointNear(left models.GeoPoint, right *models.GeoPoint, radiusKm float64) bool {
+	return right != nil && geo.HaversineKm(left.Lat, left.Lng, right.Lat, right.Lng) <= radiusKm
+}
+
+func vehicleMatchesDirection(vehicle models.Vehicle, from, to *models.GeoPoint, cnKm, kzKm float64) bool {
+	for _, trip := range searchableVehicleTrips(vehicle.Trips) {
+		if tripMatchesDirection(trip, from, to) {
+			return true
+		}
+	}
+	if len(searchableVehicleTrips(vehicle.Trips)) > 0 {
+		return false
+	}
+	return vehicleMatchesLegacyDirection(vehicle, from, to, cnKm, kzKm)
+}
+
+func vehicleMatchesLegacyDirection(vehicle models.Vehicle, from, to *models.GeoPoint, cnKm, kzKm float64) bool {
+	// Vehicles without an active plan keep the previous location/destination
+	// matching behavior.
+	if from != nil {
+		if vehicle.Location == nil || !pointNear(*vehicle.Location, from, pointRadiusKm(*vehicle.Location, *from, cnKm, kzKm)) {
+			return false
+		}
+	}
+	if to != nil {
+		matched := false
+		for _, destination := range vehicle.Destinations {
+			if pointNear(destination.Point, to, pointRadiusKm(destination.Point, *to, cnKm, kzKm)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
