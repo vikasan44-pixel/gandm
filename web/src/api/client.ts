@@ -49,27 +49,80 @@ function tryRefresh(): Promise<string | null> {
   return refreshInFlight;
 }
 
-// requestTokenRefresh is the raw refresh call — used by AuthContext's
-// handler. Deliberately bypasses request() so a 401 here can't recurse.
-export async function requestTokenRefresh(
-  kind: "admin" | "user",
-  refreshToken: string
-): Promise<{ access_token: string; refresh_token: string } | null> {
+// requestTokenRefresh is the raw refresh call — used by AuthContext's handler.
+// The refresh token travels in the httpOnly cookie (sent automatically), never
+// in the body. Deliberately bypasses request() so a 401 here can't recurse.
+// Returns the new access token, or null if the session can't be refreshed.
+let tokenRefreshInFlight: Promise<string | null> | null = null;
+const SESSION_COOKIE_LOCK = "gandm-session-cookie";
+
+// The refresh cookie is shared by every tab, while module-level promises are
+// not. Web Locks serializes refresh/logout across tabs so two requests never
+// rotate the same cookie concurrently. Browsers without Web Locks still get
+// the server-side short overlap protection and retry below.
+async function withSessionCookieLock<T>(action: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    return navigator.locks.request(SESSION_COOKIE_LOCK, action);
+  }
+  return action();
+}
+
+export function requestTokenRefresh(kind: "admin" | "user"): Promise<string | null> {
+  // Single-flight: refresh rotates the token and revokes the old jti, so two
+  // concurrent calls with the same cookie would make the second look like a
+  // replay (reuse detection would then kill the whole session). Sharing one
+  // in-flight call — covers StrictMode's double bootstrap and simultaneous
+  // 401s in the same tab. withSessionCookieLock additionally covers other
+  // tabs sharing the same httpOnly cookie.
+  if (!tokenRefreshInFlight) {
+    tokenRefreshInFlight = withSessionCookieLock(() => doTokenRefresh(kind))
+      .finally(() => {
+        tokenRefreshInFlight = null;
+      });
+  }
+  return tokenRefreshInFlight;
+}
+
+async function doTokenRefresh(kind: "admin" | "user"): Promise<string | null> {
   const path = kind === "admin" ? "/admin/refresh" : "/refresh";
   try {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      tokens?: { access_token?: string; refresh_token?: string };
-    };
-    if (!data.tokens?.access_token || !data.tokens.refresh_token) return null;
-    return { access_token: data.tokens.access_token, refresh_token: data.tokens.refresh_token };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const res = await fetch(`${API_BASE_URL}${path}`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      // Fallback for a browser without Web Locks: another tab has just
+      // replaced the shared cookie. The response deliberately did not clear
+      // it, so one retry uses the replacement token.
+      if (res.status === 409 && attempt === 0) {
+        // Let the winning response install its Set-Cookie before retrying.
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+        continue;
+      }
+      if (!res.ok) return null;
+      const data = (await res.json()) as { tokens?: { access_token?: string } };
+      return data.tokens?.access_token ?? null;
+    }
+    return null;
   } catch {
     return null;
+  }
+}
+
+// requestLogout revokes the current refresh token server-side and clears the
+// cookie. It uses the same cross-tab lock as refresh, preventing a refresh and
+// logout from racing over the shared cookie.
+export async function requestLogout(kind: "admin" | "user"): Promise<void> {
+  const path = kind === "admin" ? "/admin/logout" : "/logout";
+  try {
+    await withSessionCookieLock(async () => {
+      await fetch(`${API_BASE_URL}${path}`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+    });
+  } catch {
+    // ignore — local session is cleared regardless
   }
 }
 

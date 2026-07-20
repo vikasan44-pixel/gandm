@@ -2,7 +2,6 @@ import {
   createContext,
   useContext,
   useEffect,
-  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -15,6 +14,7 @@ import {
 import {
   onRefreshToken,
   onUnauthorized,
+  requestLogout,
   requestTokenRefresh,
   setAuthToken,
 } from "../api/client";
@@ -24,12 +24,12 @@ const STORAGE_KEY = "gandm_session";
 
 type SessionKind = "admin" | "user";
 
-interface StoredSession {
+// Only non-secret profile data is persisted (who is logged in + which refresh
+// endpoint to use). The access token lives in memory only, and the refresh
+// token in an httpOnly cookie — neither is reachable from localStorage, so an
+// XSS can't lift the session out of storage.
+interface StoredProfile {
   kind: SessionKind;
-  token: string;
-  // Absent in sessions stored before refresh support shipped — those just
-  // log out on the first 401, same as the old behavior.
-  refreshToken?: string;
   admin: Admin | null;
   user: User | null;
 }
@@ -42,16 +42,17 @@ interface AuthContextValue {
   loginAdmin: (email: string, password: string) => Promise<void>;
   loginUser: (email: string, password: string) => Promise<User>;
   registerUser: (input: RegisterInput) => Promise<User>;
-  logout: () => void;
+  applyUserProfile: (user: User) => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function loadSession(): StoredSession | null {
+function loadProfile(): StoredProfile | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredSession;
+    const parsed = JSON.parse(raw) as StoredProfile;
     if (parsed.kind !== "admin" && parsed.kind !== "user") return null;
     return parsed;
   } catch {
@@ -59,83 +60,83 @@ function loadSession(): StoredSession | null {
   }
 }
 
-function saveSession(session: StoredSession | null) {
-  if (session) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+function saveProfile(profile: StoredProfile | null) {
+  if (profile) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
   } else {
     localStorage.removeItem(STORAGE_KEY);
   }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<StoredSession | null>(null);
+  const [session, setSession] = useState<StoredProfile | null>(null);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const stored = loadSession();
-    if (stored) {
-      setAuthToken(stored.token);
-      setSession(stored);
-    }
-    setIsReady(true);
+    // Bootstrap: the access token isn't persisted, only the httpOnly refresh
+    // cookie is. If we remember who was logged in, silently refresh to mint a
+    // fresh access token; if that fails the session is gone.
+    let cancelled = false;
+    void (async () => {
+      const stored = loadProfile();
+      if (stored) {
+        const token = await requestTokenRefresh(stored.kind);
+        if (!cancelled && token) {
+          setAuthToken(token);
+          setSession(stored);
+        } else if (!cancelled) {
+          saveProfile(null);
+        }
+      }
+      if (!cancelled) setIsReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     onUnauthorized(() => {
       setAuthToken(null);
       setSession(null);
-      saveSession(null);
+      saveProfile(null);
     });
   }, []);
 
   useEffect(() => {
-    // Expired access token → exchange the refresh token for a new pair and
-    // hand the fresh access token back to the API client, which replays
-    // the failed request. Reads localStorage directly so the handler never
-    // sees a stale React closure.
+    // Expired access token → refresh via the cookie and hand the new access
+    // token back to the API client, which replays the failed request. Reads
+    // localStorage directly so the handler never sees a stale React closure.
     onRefreshToken(async () => {
-      const current = loadSession();
-      if (!current?.refreshToken) return null;
-      const tokens = await requestTokenRefresh(current.kind, current.refreshToken);
-      if (!tokens) return null;
-      const next: StoredSession = {
-        ...current,
-        token: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-      };
-      setAuthToken(next.token);
-      setSession(next);
-      saveSession(next);
-      return tokens.access_token;
+      const current = loadProfile();
+      if (!current) return null;
+      const token = await requestTokenRefresh(current.kind);
+      if (!token) return null;
+      setAuthToken(token);
+      return token;
     });
   }, []);
 
-  function applySession(next: StoredSession) {
-    setAuthToken(next.token);
+  function applySession(next: StoredProfile, accessToken: string) {
+    setAuthToken(accessToken);
     setSession(next);
-    saveSession(next);
+    saveProfile(next);
   }
 
   async function loginAdmin(email: string, password: string) {
     const res = await apiAdminLogin(email, password);
-    applySession({
-      kind: "admin",
-      token: res.tokens.access_token,
-      refreshToken: res.tokens.refresh_token,
-      admin: res.admin,
-      user: null,
-    });
+    applySession(
+      { kind: "admin", admin: res.admin, user: null },
+      res.tokens.access_token
+    );
   }
 
   async function loginUser(email: string, password: string): Promise<User> {
     const res = await apiUserLogin(email, password);
-    applySession({
-      kind: "user",
-      token: res.tokens.access_token,
-      refreshToken: res.tokens.refresh_token,
-      admin: null,
-      user: res.user,
-    });
+    applySession(
+      { kind: "user", admin: null, user: res.user },
+      res.tokens.access_token
+    );
     return res.user;
   }
 
@@ -143,35 +144,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // session, so the new user can upload verification documents right away.
   async function registerUser(input: RegisterInput): Promise<User> {
     const res = await apiUserRegister(input);
-    applySession({
-      kind: "user",
-      token: res.tokens.access_token,
-      refreshToken: res.tokens.refresh_token,
-      admin: null,
-      user: res.user,
-    });
+    applySession(
+      { kind: "user", admin: null, user: res.user },
+      res.tokens.access_token
+    );
     return res.user;
   }
 
-  function logout() {
-    setAuthToken(null);
-    setSession(null);
-    saveSession(null);
+  function applyUserProfile(user: User) {
+	const next: StoredProfile = { kind: "user", admin: null, user };
+	setSession(next);
+	saveProfile(next);
   }
 
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      kind: session?.kind ?? null,
-      admin: session?.admin ?? null,
-      user: session?.user ?? null,
-      isReady,
-      loginAdmin,
-      loginUser,
-      registerUser,
-      logout,
-    }),
-    [session, isReady]
-  );
+  async function logout() {
+    // Finish revoking/clearing the old cookie before exposing the login screen.
+    // Otherwise a fast new login can set its cookie first and a delayed logout
+    // response would erase that brand-new session.
+    const current = loadProfile();
+    if (current) await requestLogout(current.kind);
+    setAuthToken(null);
+    setSession(null);
+    saveProfile(null);
+  }
+
+  const value: AuthContextValue = {
+    kind: session?.kind ?? null,
+    admin: session?.admin ?? null,
+    user: session?.user ?? null,
+    isReady,
+    loginAdmin,
+    loginUser,
+    registerUser,
+    applyUserProfile,
+    logout,
+  };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
@@ -189,5 +196,5 @@ export function useAuth(): AuthContextValue {
 // фильтрует навигацию по /my/tools). Параметр оставлен для совместимости
 // вызовов.
 export function cabinetPathFor(_user?: User | null): string {
-  return "/app/cargo";
+  return "/app/cabinet";
 }
