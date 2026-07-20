@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gandm/internal/money"
 )
 
 type Config struct {
@@ -17,6 +19,11 @@ type Config struct {
 	JWTRefreshSecret string
 	JWTAccessTTL     time.Duration
 	JWTRefreshTTL    time.Duration
+
+	// CookieSecure sets the Secure attribute on the refresh-token cookie. Must
+	// be true in production (HTTPS); false only for local dev over plain HTTP,
+	// where browsers refuse to store Secure cookies.
+	CookieSecure bool
 
 	S3Endpoint  string
 	S3AccessKey string
@@ -36,6 +43,11 @@ type Config struct {
 	// without subscription vs with the manually-set subscription flag.
 	ContactLimitFree       int
 	ContactLimitSubscribed int
+
+	// DefaultCurrency is the ISO-4217 code used when a price is submitted
+	// without an explicit currency. Worldwide marketplace: each deal carries
+	// its own currency; this is only the fallback. Must be a supported code.
+	DefaultCurrency string
 
 	// MatchingServiceURL is the Python consolidation-matching service.
 	// Capacity limits live in platform_settings (DB), not here.
@@ -80,6 +92,30 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
 	}
 
+	// JWT secrets must be real, not the placeholders shipped in .env.example:
+	// those are public in the repo, so accepting them would let anyone forge a
+	// valid (incl. admin) token. Enforce a minimum length and reject the known
+	// placeholder, and require the two secrets to differ so a leak of one
+	// doesn't compromise the other.
+	const minSecretLen = 32
+	isPlaceholder := func(v string) bool {
+		return strings.Contains(strings.ToLower(v), "change-me")
+	}
+	for _, s := range []struct{ name, value string }{
+		{"JWT_ACCESS_SECRET", cfg.JWTAccessSecret},
+		{"JWT_REFRESH_SECRET", cfg.JWTRefreshSecret},
+	} {
+		if isPlaceholder(s.value) {
+			return nil, fmt.Errorf("%s is the placeholder from .env.example — set a real secret (e.g. `openssl rand -hex 32`)", s.name)
+		}
+		if len(s.value) < minSecretLen {
+			return nil, fmt.Errorf("%s must be at least %d characters", s.name, minSecretLen)
+		}
+	}
+	if cfg.JWTAccessSecret == cfg.JWTRefreshSecret {
+		return nil, fmt.Errorf("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must differ")
+	}
+
 	useSSL, err := strconv.ParseBool(getEnv("S3_USE_SSL", "false"))
 	if err != nil {
 		return nil, fmt.Errorf("S3_USE_SSL: %w", err)
@@ -92,9 +128,9 @@ func Load() (*Config, error) {
 	}
 	cfg.MatchRadiusCNKm = cnRadius
 
-	kzRadius, err := strconv.ParseFloat(getEnv("MATCH_RADIUS_KZ_KM", "40"), 64)
+	kzRadius, err := strconv.ParseFloat(getEnv("MATCH_RADIUS_KZ_KM", "50"), 64)
 	if err != nil || kzRadius <= 0 {
-		return nil, fmt.Errorf("MATCH_RADIUS_KZ_KM must be a positive number, got %q", getEnv("MATCH_RADIUS_KZ_KM", "40"))
+		return nil, fmt.Errorf("MATCH_RADIUS_KZ_KM must be a positive number, got %q", getEnv("MATCH_RADIUS_KZ_KM", "50"))
 	}
 	cfg.MatchRadiusKZKm = kzRadius
 
@@ -109,6 +145,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("CONTACT_LIMIT_SUBSCRIBED must be a non-negative integer, got %q", getEnv("CONTACT_LIMIT_SUBSCRIBED", "5"))
 	}
 	cfg.ContactLimitSubscribed = limitSub
+
+	defaultCurrency := money.Normalize(getEnv("DEFAULT_CURRENCY", money.Fallback))
+	if defaultCurrency == "" {
+		return nil, fmt.Errorf("DEFAULT_CURRENCY must be a supported ISO-4217 code, got %q", getEnv("DEFAULT_CURRENCY", money.Fallback))
+	}
+	cfg.DefaultCurrency = defaultCurrency
 
 	cfg.MatchingServiceURL = getEnv("MATCHING_SERVICE_URL", "http://localhost:8000")
 	cfg.MatchingSharedSecret = os.Getenv("MATCHING_SHARED_SECRET")
@@ -131,6 +173,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("JWT_REFRESH_TTL: %w", err)
 	}
 	cfg.JWTRefreshTTL = refreshTTL
+
+	cookieSecure, err := strconv.ParseBool(getEnv("COOKIE_SECURE", "false"))
+	if err != nil {
+		return nil, fmt.Errorf("COOKIE_SECURE must be a boolean, got %q", getEnv("COOKIE_SECURE", "false"))
+	}
+	cfg.CookieSecure = cookieSecure
 
 	return cfg, nil
 }

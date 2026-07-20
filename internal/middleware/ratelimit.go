@@ -35,8 +35,25 @@ func PerIPRateLimitDB(db *pgxpool.Pool, n int, window time.Duration) func(http.H
 			ip := clientIP(r)
 			ctx := r.Context()
 
+			// Serialize attempts for the same IP. A separate SELECT followed by
+			// INSERT lets concurrent requests all observe the same old count and
+			// pass together. The transaction-scoped advisory lock makes the
+			// decision and the insert one atomic operation across API instances.
+			tx, err := db.Begin(ctx)
+			if err != nil {
+				log.Printf("rate limit: begin for %s: %v", ip, err)
+				next.ServeHTTP(w, r)
+				return
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, ip); err != nil {
+				log.Printf("rate limit: lock for %s: %v", ip, err)
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			var count int
-			err := db.QueryRow(ctx,
+			err = tx.QueryRow(ctx,
 				`SELECT count(*) FROM login_attempts WHERE ip = $1 AND attempted_at > now() - $2::interval`,
 				ip, window.String()).Scan(&count)
 			if err != nil {
@@ -49,8 +66,15 @@ func PerIPRateLimitDB(db *pgxpool.Pool, n int, window time.Duration) func(http.H
 				return
 			}
 
-			if _, err := db.Exec(ctx, `INSERT INTO login_attempts (ip) VALUES ($1)`, ip); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO login_attempts (ip) VALUES ($1)`, ip); err != nil {
 				log.Printf("rate limit: record attempt for %s: %v", ip, err)
+				next.ServeHTTP(w, r)
+				return
+			}
+			if err := tx.Commit(ctx); err != nil {
+				log.Printf("rate limit: commit for %s: %v", ip, err)
+				next.ServeHTTP(w, r)
+				return
 			}
 			if rand.Intn(100) == 0 {
 				go func() {

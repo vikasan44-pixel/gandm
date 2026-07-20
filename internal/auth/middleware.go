@@ -35,9 +35,22 @@ func (m *Manager) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		userID, err := m.ParseAccessToken(token, SubjectUser)
+		userID, sessionID, err := m.ParseAccessTokenDetailed(token, SubjectUser)
 		if err != nil {
 			httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired token")
+			return
+		}
+		if m.sessions == nil {
+			httpx.WriteError(w, http.StatusServiceUnavailable, "session_check_unavailable", "session validation is not configured")
+			return
+		}
+		active, err := m.sessions(r.Context(), SubjectUser, userID, sessionID)
+		if err != nil {
+			httpx.WriteError(w, http.StatusServiceUnavailable, "session_check_unavailable", "could not validate session")
+			return
+		}
+		if !active {
+			httpx.WriteError(w, http.StatusUnauthorized, "session_replaced", "account was signed in on another device")
 			return
 		}
 
@@ -57,9 +70,22 @@ func (m *Manager) RequireAdminAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		adminID, err := m.ParseAccessToken(token, SubjectAdmin)
+		adminID, sessionID, err := m.ParseAccessTokenDetailed(token, SubjectAdmin)
 		if err != nil {
 			httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired token")
+			return
+		}
+		if m.sessions == nil {
+			httpx.WriteError(w, http.StatusServiceUnavailable, "session_check_unavailable", "session validation is not configured")
+			return
+		}
+		active, err := m.sessions(r.Context(), SubjectAdmin, adminID, sessionID)
+		if err != nil {
+			httpx.WriteError(w, http.StatusServiceUnavailable, "session_check_unavailable", "could not validate session")
+			return
+		}
+		if !active {
+			httpx.WriteError(w, http.StatusUnauthorized, "session_replaced", "account was signed in on another device")
 			return
 		}
 
