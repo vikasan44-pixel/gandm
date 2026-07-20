@@ -13,9 +13,7 @@ import (
 	"gandm/internal/service"
 )
 
-type WarehouseHandler struct {
-	svc *service.WarehouseService
-}
+type WarehouseHandler struct{ svc *service.WarehouseService }
 
 func NewWarehouseHandler(svc *service.WarehouseService) *WarehouseHandler {
 	return &WarehouseHandler{svc: svc}
@@ -27,14 +25,12 @@ func (h *WarehouseHandler) CreateFillReport(w http.ResponseWriter, r *http.Reque
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
 		return
 	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_upload", "file too large or malformed multipart body")
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
-
 	expected, err := strconv.ParseFloat(r.FormValue("expected_fill_percent"), 64)
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", "expected_fill_percent must be a number")
@@ -50,18 +46,11 @@ func (h *WarehouseHandler) CreateFillReport(w http.ResponseWriter, r *http.Reque
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", "report_date must be YYYY-MM-DD")
 		return
 	}
-
-	input := service.CreateFillReportInput{
-		ExpectedFillPercent: expected,
-		ActualFillPercent:   actual,
-		ReportDate:          reportDate,
-	}
-	// Photo is optional — a report without one is valid.
+	input := service.CreateFillReportInput{ExpectedFillPercent: expected, ActualFillPercent: actual, ReportDate: reportDate}
 	if file, header, err := r.FormFile("photo"); err == nil {
 		file.Close()
 		input.Photo = header
 	}
-
 	report, err := h.svc.CreateFillReport(r.Context(), userID, input)
 	if err != nil {
 		writeCargoServiceError(w, err)
@@ -76,7 +65,6 @@ func (h *WarehouseHandler) ListMyFillReports(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
 		return
 	}
-
 	reports, err := h.svc.ListMyFillReports(r.Context(), userID)
 	if err != nil {
 		writeCargoServiceError(w, err)
@@ -91,7 +79,6 @@ func (h *WarehouseHandler) GetLatestFillReport(w http.ResponseWriter, r *http.Re
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid user id")
 		return
 	}
-
 	report, err := h.svc.GetLatestFillReport(r.Context(), userID)
 	if err != nil {
 		writeCargoServiceError(w, err)
@@ -106,7 +93,6 @@ func (h *AdminHandler) ListUserFillReports(w http.ResponseWriter, r *http.Reques
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid user id")
 		return
 	}
-
 	reports, err := h.svc.ListUserFillReports(r.Context(), userID)
 	if err != nil {
 		writeAdminServiceError(w, err)

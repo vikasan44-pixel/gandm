@@ -3,12 +3,15 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"gandm/internal/auth"
 	"gandm/internal/httpx"
+	"gandm/internal/service"
 )
 
 func (h *CargoHandler) ListMyDispatchThresholds(w http.ResponseWriter, r *http.Request) {
@@ -27,8 +30,12 @@ func (h *CargoHandler) ListMyDispatchThresholds(w http.ResponseWriter, r *http.R
 }
 
 type dispatchThresholdRequest struct {
-	ThresholdM3 float64 `json:"threshold_m3"`
-	AccruedM3   float64 `json:"accrued_m3"`
+	WarehouseID           *uuid.UUID `json:"warehouse_id"`
+	ThresholdM3           float64    `json:"threshold_m3"`
+	AccruedM3             *float64   `json:"accrued_m3"`
+	ManualAccruedM3       *float64   `json:"manual_accrued_m3"`
+	EstimatedDispatchDate string     `json:"estimated_dispatch_date"`
+	Status                string     `json:"status"`
 }
 
 func (h *CargoHandler) SetRouteDispatchThreshold(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +56,29 @@ func (h *CargoHandler) SetRouteDispatchThreshold(w http.ResponseWriter, r *http.
 		return
 	}
 
-	threshold, err := h.svc.SetRouteDispatchThreshold(r.Context(), userID, routeID, req.ThresholdM3, req.AccruedM3)
+	var estimatedDate *time.Time
+	if value := strings.TrimSpace(req.EstimatedDispatchDate); value != "" {
+		parsed, err := time.Parse(time.DateOnly, value)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid_date", "estimated_dispatch_date must be YYYY-MM-DD")
+			return
+		}
+		estimatedDate = &parsed
+	}
+	manualAccruedM3 := 0.0
+	if req.ManualAccruedM3 != nil {
+		manualAccruedM3 = *req.ManualAccruedM3
+	} else if req.AccruedM3 != nil {
+		// Backward compatibility for clients that still send accrued_m3.
+		manualAccruedM3 = *req.AccruedM3
+	}
+	threshold, err := h.svc.SetRouteDispatchThreshold(r.Context(), userID, routeID, service.DispatchThresholdInput{
+		WarehouseID:           req.WarehouseID,
+		ThresholdM3:           req.ThresholdM3,
+		ManualAccruedM3:       manualAccruedM3,
+		EstimatedDispatchDate: estimatedDate,
+		Status:                req.Status,
+	})
 	if err != nil {
 		writeCargoServiceError(w, err)
 		return
