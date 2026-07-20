@@ -47,6 +47,12 @@ func (r *VerificationRepository) GetByID(ctx context.Context, id uuid.UUID) (*mo
 	return scanVerification(r.db.QueryRow(ctx, q, id))
 }
 
+// GetByIDForUpdate serializes admin decisions for the same request.
+func (r *VerificationRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*models.VerificationRequest, error) {
+	q := `SELECT ` + verificationColumns + ` FROM verification_requests WHERE id = $1 FOR UPDATE`
+	return scanVerification(r.db.QueryRow(ctx, q, id))
+}
+
 // GetLatestByUserID returns the most recent verification request for a user.
 // There is exactly one per user today (created at registration), but this
 // keeps working unchanged once resubmission after rejection is added.
@@ -108,7 +114,7 @@ func (r *VerificationRepository) UpdateStatus(ctx context.Context, id uuid.UUID,
 	const q = `
 		UPDATE verification_requests
 		SET status = $2, reject_reason = $3, reviewed_by = $4, reviewed_at = $5
-		WHERE id = $1
+		WHERE id = $1 AND status = 'pending'
 	`
 	tag, err := r.db.Exec(ctx, q, id, status, rejectReason, reviewedBy, reviewedAt)
 	if err != nil {

@@ -18,6 +18,12 @@ const (
 )
 
 type UserStatus string
+type LegalForm string
+
+const (
+	LegalFormIndividual  LegalForm = "individual"
+	LegalFormLegalEntity LegalForm = "legal_entity"
+)
 
 const (
 	UserStatusPending  UserStatus = "pending"
@@ -31,6 +37,7 @@ type User struct {
 	Email           string          `db:"email" json:"email"`
 	Phone           string          `db:"phone" json:"phone"`
 	CompanyName     string          `db:"company_name" json:"company_name"`
+	LegalForm       LegalForm       `db:"legal_form" json:"legal_form"`
 	ParticipantType ParticipantType `db:"participant_type" json:"participant_type"`
 	PasswordHash    string          `db:"password_hash" json:"-"`
 	Status          UserStatus      `db:"status" json:"status"`

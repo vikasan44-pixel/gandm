@@ -18,24 +18,33 @@ import (
 const maxUploadSize = 16 << 20 // 16 MB
 
 type RegisterHandler struct {
-	svc *service.RegistrationService
+	svc          *service.RegistrationService
+	cookieSecure bool
 }
 
-func NewRegisterHandler(svc *service.RegistrationService) *RegisterHandler {
-	return &RegisterHandler{svc: svc}
+func NewRegisterHandler(svc *service.RegistrationService, cookieSecure bool) *RegisterHandler {
+	return &RegisterHandler{svc: svc, cookieSecure: cookieSecure}
+}
+
+// accessTokenBody is the token payload returned to the client. Only the
+// short-lived access token travels in the response body now; the refresh token
+// lives in an httpOnly cookie the browser stores and JS can't read.
+type accessTokenBody struct {
+	AccessToken string `json:"access_token"`
 }
 
 type registerRequest struct {
-	Email       string      `json:"email"`
-	Phone       string      `json:"phone"`
-	CompanyName string      `json:"company_name"`
-	Password    string      `json:"password"`
-	ToolIDs     []uuid.UUID `json:"tool_ids"`
+	Email       string           `json:"email"`
+	Phone       string           `json:"phone"`
+	CompanyName string           `json:"company_name"`
+	LegalForm   models.LegalForm `json:"legal_form"`
+	Password    string           `json:"password"`
+	ToolIDs     []uuid.UUID      `json:"tool_ids"`
 }
 
 type registerResponse struct {
-	User   *models.User   `json:"user"`
-	Tokens auth.TokenPair `json:"tokens"`
+	User   *models.User    `json:"user"`
+	Tokens accessTokenBody `json:"tokens"`
 }
 
 func (h *RegisterHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -45,10 +54,11 @@ func (h *RegisterHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, tokens, err := h.svc.Register(r.Context(), service.RegisterInput{
+	user, sess, err := h.svc.Register(r.Context(), service.RegisterInput{
 		Email:       req.Email,
 		Phone:       req.Phone,
 		CompanyName: req.CompanyName,
+		LegalForm:   req.LegalForm,
 		Password:    req.Password,
 		ToolIDs:     req.ToolIDs,
 	})
@@ -57,7 +67,11 @@ func (h *RegisterHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, registerResponse{User: user, Tokens: tokens})
+	httpx.SetRefreshCookie(w, sess.RefreshToken, h.cookieSecure, sess.RefreshExpires)
+	httpx.WriteJSON(w, http.StatusCreated, registerResponse{
+		User:   user,
+		Tokens: accessTokenBody{AccessToken: sess.AccessToken},
+	})
 }
 
 type userLoginRequest struct {
@@ -72,42 +86,84 @@ func (h *RegisterHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, tokens, err := h.svc.Login(r.Context(), req.Email, req.Password)
+	user, sess, err := h.svc.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, registerResponse{User: user, Tokens: tokens})
-}
-
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	httpx.SetRefreshCookie(w, sess.RefreshToken, h.cookieSecure, sess.RefreshExpires)
+	httpx.WriteJSON(w, http.StatusOK, registerResponse{
+		User:   user,
+		Tokens: accessTokenBody{AccessToken: sess.AccessToken},
+	})
 }
 
 type refreshResponse struct {
-	Tokens auth.TokenPair `json:"tokens"`
+	Tokens accessTokenBody `json:"tokens"`
 }
 
+// Refresh reads the refresh token from the httpOnly cookie (never the body),
+// rotates it, and sets the new cookie. On failure the cookie is cleared so a
+// dead session doesn't keep retrying.
 func (h *RegisterHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	var req refreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "refresh_token is required")
+	refreshToken, ok := httpx.RefreshCookie(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "invalid_credentials", "missing refresh token")
 		return
 	}
 
-	tokens, err := h.svc.Refresh(r.Context(), req.RefreshToken)
+	sess, err := h.svc.Refresh(r.Context(), refreshToken)
 	if err != nil {
+		if errors.Is(err, service.ErrRefreshAlreadyRotated) {
+			httpx.WriteError(w, http.StatusConflict, "refresh_already_rotated", "refresh token was already rotated; retry")
+			return
+		}
+		httpx.ClearRefreshCookie(w, h.cookieSecure)
 		writeServiceError(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, refreshResponse{Tokens: tokens})
+	httpx.SetRefreshCookie(w, sess.RefreshToken, h.cookieSecure, sess.RefreshExpires)
+	httpx.WriteJSON(w, http.StatusOK, refreshResponse{Tokens: accessTokenBody{AccessToken: sess.AccessToken}})
+}
+
+// Logout revokes the current refresh token server-side and clears the cookie.
+func (h *RegisterHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if refreshToken, ok := httpx.RefreshCookie(r); ok {
+		_ = h.svc.Logout(r.Context(), refreshToken)
+	}
+	httpx.ClearRefreshCookie(w, h.cookieSecure)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type meResponse struct {
 	User         *models.User                `json:"user"`
 	Verification *models.VerificationRequest `json:"verification"`
+}
+
+type updateProfileRequest struct {
+	Name      string           `json:"name"`
+	LegalForm models.LegalForm `json:"legal_form"`
+}
+
+func (h *RegisterHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	var req updateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "malformed JSON body")
+		return
+	}
+	user, verification, err := h.svc.UpdateProfile(r.Context(), userID, req.Name, req.LegalForm)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, meResponse{User: user, Verification: verification})
 }
 
 func (h *RegisterHandler) Me(w http.ResponseWriter, r *http.Request) {

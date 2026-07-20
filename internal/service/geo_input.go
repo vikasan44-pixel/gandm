@@ -19,6 +19,13 @@ func validateGeoPoint(field string, p models.GeoPoint) (models.GeoPoint, error) 
 	if !geo.ValidLatLng(p.Lat, p.Lng) {
 		return p, fmt.Errorf("%w: %s coordinates out of WGS-84 range", ErrInvalidInput, field)
 	}
+	// Older vehicle locations/destinations were stored before the repository
+	// persisted map provenance. Their coordinates are already WGS-84, so an
+	// empty source is valid legacy data and can safely use the neutral OSM
+	// marker when the point is reused in a trip form.
+	if p.Source == "" {
+		p.Source = models.CoordSourceOSM
+	}
 	if p.Source != models.CoordSourceAmap && p.Source != models.CoordSourceOSM {
 		return p, fmt.Errorf("%w: %s.source must be \"amap\" or \"osm\"", ErrInvalidInput, field)
 	}

@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid email or password")
-	ErrAlreadyReviewed    = errors.New("verification request already reviewed")
+	ErrInvalidCredentials            = errors.New("invalid email or password")
+	ErrAlreadyReviewed               = errors.New("verification request already reviewed")
+	ErrVerificationDocumentsRequired = errors.New("required verification documents are missing")
 )
 
 const documentViewURLTTL = 15 * time.Minute
@@ -40,7 +41,7 @@ type DocumentView struct {
 type VerificationDetail struct {
 	Verification *models.VerificationRequest `json:"verification"`
 	User         *models.User                `json:"user"`
-	Documents    []DocumentView               `json:"documents"`
+	Documents    []DocumentView              `json:"documents"`
 }
 
 type AdminService struct {
@@ -53,44 +54,49 @@ func NewAdminService(db *pgxpool.Pool, tokens *auth.Manager, storage *storage.S3
 	return &AdminService{db: db, tokens: tokens, storage: storage}
 }
 
-func (s *AdminService) Login(ctx context.Context, email, password string) (*models.Admin, auth.TokenPair, error) {
+func (s *AdminService) Login(ctx context.Context, email, password string) (*models.Admin, IssuedSession, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 
 	adminRepo := repository.NewAdminRepository(s.db)
 	admin, err := adminRepo.GetByEmail(ctx, email)
 	if errors.Is(err, repository.ErrNotFound) {
-		return nil, auth.TokenPair{}, ErrInvalidCredentials
+		return nil, IssuedSession{}, ErrInvalidCredentials
 	}
 	if err != nil {
-		return nil, auth.TokenPair{}, err
+		return nil, IssuedSession{}, err
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(password)); err != nil {
-		return nil, auth.TokenPair{}, ErrInvalidCredentials
+		return nil, IssuedSession{}, ErrInvalidCredentials
 	}
 
-	tokens, err := s.tokens.IssueTokenPair(admin.ID, auth.SubjectAdmin)
+	sess, err := startSingleSession(ctx, s.db, s.tokens, admin.ID, auth.SubjectAdmin)
 	if err != nil {
-		return nil, auth.TokenPair{}, err
+		return nil, IssuedSession{}, err
 	}
 
-	return admin, tokens, nil
+	return admin, sess, nil
 }
 
-// Refresh exchanges a valid staff refresh token for a fresh token pair.
-func (s *AdminService) Refresh(ctx context.Context, refreshToken string) (auth.TokenPair, error) {
-	adminID, err := s.tokens.ParseRefreshToken(refreshToken, auth.SubjectAdmin)
-	if err != nil {
-		return auth.TokenPair{}, ErrInvalidCredentials
-	}
-	adminRepo := repository.NewAdminRepository(s.db)
-	if _, err := adminRepo.GetByID(ctx, adminID); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return auth.TokenPair{}, ErrInvalidCredentials
-		}
-		return auth.TokenPair{}, err
-	}
-	return s.tokens.IssueTokenPair(adminID, auth.SubjectAdmin)
+// Refresh validates a staff refresh token and rotates it (revoke old, issue
+// new) with reuse detection — see rotateSession.
+func (s *AdminService) Refresh(ctx context.Context, refreshToken string) (IssuedSession, error) {
+	_, sess, err := rotateSession(ctx, s.db, s.tokens, refreshToken, auth.SubjectAdmin,
+		func(ctx context.Context, adminID uuid.UUID) error {
+			if _, err := repository.NewAdminRepository(s.db).GetByID(ctx, adminID); err != nil {
+				if errors.Is(err, repository.ErrNotFound) {
+					return ErrInvalidCredentials
+				}
+				return err
+			}
+			return nil
+		})
+	return sess, err
+}
+
+// Logout revokes the presented staff refresh token (single-session logout).
+func (s *AdminService) Logout(ctx context.Context, refreshToken string) error {
+	return revokeSessionByToken(ctx, s.db, s.tokens, refreshToken, auth.SubjectAdmin)
 }
 
 // DashboardStats aggregates the four dashboard cards. "new_today" and
@@ -137,7 +143,7 @@ func (s *AdminService) VerificationQueue(ctx context.Context, status models.Veri
 
 func (s *AdminService) VerificationDetail(ctx context.Context, verificationID uuid.UUID) (*VerificationDetail, error) {
 	verRepo := repository.NewVerificationRepository(s.db)
-	verification, err := verRepo.GetByID(ctx, verificationID)
+	verification, err := verRepo.GetByIDForUpdate(ctx, verificationID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,12 +200,31 @@ func (s *AdminService) reviewVerification(ctx context.Context, adminID, verifica
 		return ErrAlreadyReviewed
 	}
 
+	userRepo := repository.NewUserRepository(tx)
+	user, err := userRepo.GetByIDForUpdate(ctx, verification.UserID)
+	if err != nil {
+		return err
+	}
+	if newVerStatus == models.VerificationApproved {
+		types, err := repository.NewDocumentRepository(tx).TypeSetByUserID(ctx, verification.UserID)
+		if err != nil {
+			return err
+		}
+		required := []models.DocumentType{models.DocumentIDCard}
+		if user.LegalForm == models.LegalFormLegalEntity {
+			required = []models.DocumentType{models.DocumentFoundingDocs, models.DocumentBusinessLicense}
+		}
+		for _, docType := range required {
+			if !types[docType] {
+				return fmt.Errorf("%w: missing %s", ErrVerificationDocumentsRequired, docType)
+			}
+		}
+	}
+
 	now := time.Now()
 	if err := verRepo.UpdateStatus(ctx, verificationID, newVerStatus, reason, adminID, now); err != nil {
 		return err
 	}
-
-	userRepo := repository.NewUserRepository(tx)
 	if err := userRepo.UpdateStatus(ctx, verification.UserID, newUserStatus); err != nil {
 		return err
 	}

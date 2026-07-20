@@ -23,17 +23,19 @@ type UserRepository struct {
 	db Querier
 }
 
+const userColumns = `id, email, phone, company_name, legal_form, participant_type, password_hash, status, has_subscription, language, created_at, last_active_at`
+
 func NewUserRepository(db Querier) *UserRepository {
 	return &UserRepository{db: db}
 }
 
 func (r *UserRepository) Create(ctx context.Context, u *models.User) error {
 	const q = `
-		INSERT INTO users (id, email, phone, company_name, participant_type, password_hash, status, has_subscription, language, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO users (id, email, phone, company_name, legal_form, participant_type, password_hash, status, has_subscription, language, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 	_, err := r.db.Exec(ctx, q,
-		u.ID, u.Email, u.Phone, u.CompanyName, u.ParticipantType, u.PasswordHash, u.Status, u.HasSubscription, u.Language, u.CreatedAt,
+		u.ID, u.Email, u.Phone, u.CompanyName, u.LegalForm, u.ParticipantType, u.PasswordHash, u.Status, u.HasSubscription, u.Language, u.CreatedAt,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -47,12 +49,12 @@ func (r *UserRepository) Create(ctx context.Context, u *models.User) error {
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	const q = `
-		SELECT id, email, phone, company_name, participant_type, password_hash, status, has_subscription, language, created_at, last_active_at
+		SELECT ` + userColumns + `
 		FROM users WHERE id = $1
 	`
 	var u models.User
 	err := r.db.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
+		&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.LegalForm, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -66,14 +68,43 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Use
 // GetByIDForUpdate is GetByID with a row lock — serializes operations that
 // consume per-user quotas (contact reveals), so parallel requests can't
 // both pass the limit check. Only meaningful inside a transaction.
+// ListByIDs fetches users for a set of ids in a single query, keyed by id.
+// Used to avoid N+1 lookups when revealing counterparties/contacts. Ids absent
+// from the table are simply missing from the map.
+func (r *UserRepository) ListByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*models.User, error) {
+	result := make(map[uuid.UUID]*models.User, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	const q = `
+		SELECT ` + userColumns + `
+		FROM users WHERE id = ANY($1)
+	`
+	rows, err := r.db.Query(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(
+			&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.LegalForm, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
+		); err != nil {
+			return nil, err
+		}
+		result[u.ID] = &u
+	}
+	return result, rows.Err()
+}
+
 func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	const q = `
-		SELECT id, email, phone, company_name, participant_type, password_hash, status, has_subscription, language, created_at, last_active_at
+		SELECT ` + userColumns + `
 		FROM users WHERE id = $1 FOR UPDATE
 	`
 	var u models.User
 	err := r.db.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
+		&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.LegalForm, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -86,12 +117,12 @@ func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*m
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.User, error) {
 	const q = `
-		SELECT id, email, phone, company_name, participant_type, password_hash, status, has_subscription, language, created_at, last_active_at
+		SELECT ` + userColumns + `
 		FROM users WHERE email = $1
 	`
 	var u models.User
 	err := r.db.QueryRow(ctx, q, email).Scan(
-		&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
+		&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.LegalForm, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -104,20 +135,26 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*models.
 
 // UserFilter narrows the admin user list. Nil/empty fields are not filtered on.
 type UserFilter struct {
-	ParticipantType *models.ParticipantType
-	Status          *models.UserStatus
-	Search          string // matches email, company_name or phone (case-insensitive substring)
+	ServiceType string
+	Status      *models.UserStatus
+	Search      string // matches email, company_name or phone (case-insensitive substring)
 }
 
 func (r *UserRepository) List(ctx context.Context, f UserFilter) ([]models.User, error) {
 	query := `
-		SELECT id, email, phone, company_name, participant_type, password_hash, status, has_subscription, language, created_at, last_active_at
+		SELECT ` + userColumns + `
 		FROM users WHERE 1=1
 	`
 	args := make([]any, 0, 3)
-	if f.ParticipantType != nil {
-		args = append(args, *f.ParticipantType)
-		query += fmt.Sprintf(" AND participant_type = $%d", len(args))
+	if f.ServiceType != "" {
+		args = append(args, f.ServiceType)
+		n := len(args)
+		query += fmt.Sprintf(` AND CASE
+			WHEN $%[1]d = 'warehouse' THEN EXISTS (SELECT 1 FROM user_tools ut JOIN tools t ON t.id=ut.tool_id WHERE ut.user_id=users.id AND t.key='manage_warehouse_slots')
+			WHEN $%[1]d = 'carrier' THEN EXISTS (SELECT 1 FROM user_tools ut JOIN tools t ON t.id=ut.tool_id WHERE ut.user_id=users.id AND t.key IN ('manage_fleet','receive_cargo_by_route','submit_offer'))
+			WHEN $%[1]d = 'customs_rep' THEN EXISTS (SELECT 1 FROM user_tools ut JOIN tools t ON t.id=ut.tool_id WHERE ut.user_id=users.id AND t.key='manage_customs_docs')
+			WHEN $%[1]d = 'client' THEN NOT EXISTS (SELECT 1 FROM user_tools ut JOIN tools t ON t.id=ut.tool_id WHERE ut.user_id=users.id AND t.key IN ('manage_warehouse_slots','manage_fleet','receive_cargo_by_route','submit_offer','manage_customs_docs'))
+			ELSE participant_type::text = $%[1]d END`, n)
 	}
 	if f.Status != nil {
 		args = append(args, *f.Status)
@@ -139,7 +176,7 @@ func (r *UserRepository) List(ctx context.Context, f UserFilter) ([]models.User,
 	users := make([]models.User, 0)
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.LegalForm, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -157,6 +194,22 @@ func (r *UserRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status 
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, name string, legalForm models.LegalForm) error {
+	tag, err := r.db.Exec(ctx, `UPDATE users SET company_name = $2, legal_form = $3 WHERE id = $1`, id, name, legalForm)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) UpdateParticipantType(ctx context.Context, id uuid.UUID, participantType models.ParticipantType) error {
+	_, err := r.db.Exec(ctx, `UPDATE users SET participant_type = $2 WHERE id = $1`, id, participantType)
+	return err
 }
 
 func (r *UserRepository) UpdateSubscription(ctx context.Context, id uuid.UUID, hasSubscription bool) error {

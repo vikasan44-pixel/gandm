@@ -51,3 +51,22 @@ func (r *DocumentRepository) ListByUserID(ctx context.Context, userID uuid.UUID)
 	}
 	return docs, nil
 }
+
+// TypeSetByUserID returns the uploaded document kinds without loading file
+// metadata; verification approval uses it to enforce the minimum dossier.
+func (r *DocumentRepository) TypeSetByUserID(ctx context.Context, userID uuid.UUID) (map[models.DocumentType]bool, error) {
+	rows, err := r.db.Query(ctx, `SELECT DISTINCT type FROM documents WHERE user_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[models.DocumentType]bool)
+	for rows.Next() {
+		var docType models.DocumentType
+		if err := rows.Scan(&docType); err != nil {
+			return nil, err
+		}
+		result[docType] = true
+	}
+	return result, rows.Err()
+}

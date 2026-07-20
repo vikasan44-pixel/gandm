@@ -94,9 +94,26 @@ func (s *AdminService) Analytics(ctx context.Context, days int) (*Analytics, err
 		return nil, err
 	}
 
+	// Service categories come from enabled participant tools, not the retired
+	// one-role participant_type column. A multi-service company is correctly
+	// represented in each service it actually provides.
 	typeRows, err := s.db.Query(ctx, `
-		SELECT participant_type::text, count(*)
-		FROM users GROUP BY 1 ORDER BY 2 DESC`)
+		WITH service_users AS (
+			SELECT DISTINCT ut.user_id, CASE
+				WHEN t.key = 'manage_warehouse_slots' THEN 'warehouse'
+				WHEN t.key IN ('manage_fleet','receive_cargo_by_route','submit_offer') THEN 'carrier'
+				WHEN t.key = 'manage_customs_docs' THEN 'customs_rep'
+			END AS service_type
+			FROM user_tools ut JOIN tools t ON t.id = ut.tool_id
+			WHERE t.key IN ('manage_warehouse_slots','manage_fleet','receive_cargo_by_route','submit_offer','manage_customs_docs')
+		), categories AS (
+			SELECT user_id, service_type FROM service_users WHERE service_type IS NOT NULL
+			UNION ALL
+			SELECT u.id, 'client' FROM users u
+			WHERE NOT EXISTS (SELECT 1 FROM service_users su WHERE su.user_id = u.id)
+		)
+		SELECT service_type, count(DISTINCT user_id)
+		FROM categories GROUP BY service_type ORDER BY 2 DESC`)
 	if err != nil {
 		return nil, err
 	}

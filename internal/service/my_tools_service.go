@@ -46,5 +46,12 @@ func (s *CargoService) SetMyTools(ctx context.Context, userID uuid.UUID, toolIDs
 	if err := toolRepo.ReplaceUserTools(ctx, userID, toolIDs); err != nil {
 		return nil, err
 	}
-	return toolRepo.ListByUserID(ctx, userID)
+	tools, err := toolRepo.ListByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := repository.NewUserRepository(s.db).UpdateParticipantType(ctx, userID, legacyParticipantType(tools)); err != nil {
+		return nil, err
+	}
+	return tools, nil
 }

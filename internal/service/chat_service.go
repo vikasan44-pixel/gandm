@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -13,6 +14,19 @@ import (
 )
 
 const maxMessageBodyLen = 4000
+
+// validAttachmentURL rejects anything but a real http(s) link. Attachment
+// URLs are rendered as clickable <a href> in the chat UI, so a scheme like
+// javascript: would execute in the victim's session on click (stored XSS).
+// Only absolute http/https URLs with a host are allowed.
+func validAttachmentURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	return (scheme == "http" || scheme == "https") && u.Host != ""
+}
 
 // requireChatParticipant is the chat access gate: only rows in
 // chat_participants grant access. A chat the caller isn't part of is
@@ -89,6 +103,9 @@ func (s *CargoService) SendChatMessage(ctx context.Context, userID, chatID uuid.
 	}
 	if len(body) > maxMessageBodyLen {
 		return nil, fmt.Errorf("%w: message body exceeds %d characters", ErrInvalidInput, maxMessageBodyLen)
+	}
+	if attachmentURL != "" && !validAttachmentURL(attachmentURL) {
+		return nil, fmt.Errorf("%w: attachment_url must be an http(s) link", ErrInvalidInput)
 	}
 
 	msg := &models.Message{

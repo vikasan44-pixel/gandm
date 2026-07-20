@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"gandm/internal/auth"
 	"gandm/internal/models"
 	"gandm/internal/repository"
 )
@@ -40,12 +41,8 @@ type CompanyRef struct {
 func (s *AdminService) ListUsers(ctx context.Context, f UserListFilter) ([]models.User, error) {
 	filter := repository.UserFilter{Search: strings.TrimSpace(f.Search)}
 
-	// participant_type — legacy-поле (роли больше нет); фильтр по нему
-	// оставлен для старых данных, произвольное значение просто вернёт
-	// пустой результат.
 	if f.ParticipantType != "" {
-		pt := models.ParticipantType(f.ParticipantType)
-		filter.ParticipantType = &pt
+		filter.ServiceType = f.ParticipantType
 	}
 	if f.Status != "" {
 		st := models.UserStatus(f.Status)
@@ -131,6 +128,13 @@ func (s *AdminService) SetUserTools(ctx context.Context, adminID, userID uuid.UU
 	if err := toolRepo.ReplaceUserTools(ctx, userID, toolIDs); err != nil {
 		return err
 	}
+	tools, err := toolRepo.ListByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if err := userRepo.UpdateParticipantType(ctx, userID, legacyParticipantType(tools)); err != nil {
+		return err
+	}
 
 	if err := writeAuditLog(ctx, tx, adminID, "user_tools_updated", &userID, map[string]any{"tool_ids": toolIDs}); err != nil {
 		return err
@@ -164,6 +168,13 @@ func (s *AdminService) ApplyPermissionSet(ctx context.Context, adminID, userID, 
 
 	toolRepo := repository.NewToolRepository(tx)
 	if err := toolRepo.ReplaceUserTools(ctx, userID, toolIDs); err != nil {
+		return err
+	}
+	tools, err := toolRepo.ListByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if err := userRepo.UpdateParticipantType(ctx, userID, legacyParticipantType(tools)); err != nil {
 		return err
 	}
 
@@ -247,6 +258,16 @@ func (s *AdminService) setUserStatus(ctx context.Context, adminID, userID uuid.U
 	userRepo := repository.NewUserRepository(tx)
 	if err := userRepo.UpdateStatus(ctx, userID, status); err != nil {
 		return err
+	}
+
+	// Blocking must end existing sessions: revoke every refresh token so the
+	// account can't be silently renewed. Live access tokens still work until
+	// they expire (≤ JWT_ACCESS_TTL), which is the accepted short window.
+	if status == models.UserStatusBlocked {
+		rtRepo := repository.NewRefreshTokenRepository(tx)
+		if err := rtRepo.RevokeAllForSubject(ctx, auth.SubjectUser, userID, time.Now()); err != nil {
+			return err
+		}
 	}
 
 	if err := writeAuditLog(ctx, tx, adminID, action, &userID, nil); err != nil {

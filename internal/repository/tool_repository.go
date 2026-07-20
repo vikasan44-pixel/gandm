@@ -59,10 +59,7 @@ func (r *ToolRepository) UpsertByKey(ctx context.Context, t *models.Tool) error 
 		INSERT INTO tools (id, key, name, description, category, is_active, price_kzt)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (key) DO UPDATE SET
-			name = EXCLUDED.name,
-			description = EXCLUDED.description,
-			category = EXCLUDED.category,
-			is_active = EXCLUDED.is_active
+			key = EXCLUDED.key
 		RETURNING id
 	`
 	return r.db.QueryRow(ctx, q, t.ID, t.Key, t.Name, t.Description, t.Category, t.IsActive, t.PriceKZT).Scan(&t.ID)
