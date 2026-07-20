@@ -121,15 +121,15 @@ func (r *AntifraudRepository) CountDealsBetween(ctx context.Context, a, b uuid.U
 // Система «не обвиняет — замечает аномалию»: строка попадает админу на
 // проверку.
 type SuspiciousPair struct {
-	ClientID           uuid.UUID `json:"client_id"`
-	ClientLabel        string    `json:"client_label"`
-	ParticipantID      uuid.UUID `json:"participant_id"`
-	ParticipantLabel   string    `json:"participant_label"`
-	DealsCount         int       `json:"deals_count"`
-	SilentChats        int       `json:"silent_chats"`
-	DocumentedDeals    int       `json:"documented_deals"`
-	IsFavorite         bool      `json:"is_favorite"`
-	LastDealCreatedAt  time.Time `json:"last_deal_created_at"`
+	ClientID          uuid.UUID `json:"client_id"`
+	ClientLabel       string    `json:"client_label"`
+	ParticipantID     uuid.UUID `json:"participant_id"`
+	ParticipantLabel  string    `json:"participant_label"`
+	DealsCount        int       `json:"deals_count"`
+	SilentChats       int       `json:"silent_chats"`
+	DocumentedDeals   int       `json:"documented_deals"`
+	IsFavorite        bool      `json:"is_favorite"`
+	LastDealCreatedAt time.Time `json:"last_deal_created_at"`
 }
 
 // ListSuspiciousPairs: пары с minDeals+ завершёнными одиночными сделками.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,8 +14,10 @@ import (
 
 	"gandm/internal/matching"
 	"gandm/internal/models"
+	"gandm/internal/money"
 	"gandm/internal/payment"
 	"gandm/internal/repository"
+	"gandm/internal/storage"
 )
 
 // Tool keys gating the two participant-facing cargo actions. Submitting a
@@ -29,6 +32,7 @@ var (
 	ErrForbiddenTool     = errors.New("missing required tool")
 	ErrForbiddenNotOwner = errors.New("not the owner of this resource")
 	ErrCargoNotOpen      = errors.New("cargo request is not open")
+	ErrOfferNotEditable  = errors.New("offer is no longer editable")
 )
 
 // CargoServiceConfig carries the env-tunable knobs so the constructor
@@ -43,6 +47,10 @@ type CargoServiceConfig struct {
 	// Lifetime contact-reveal limits per client, without/with subscription.
 	ContactLimitFree       int
 	ContactLimitSubscribed int
+	// DefaultCurrency is the ISO-4217 fallback when a submitted price omits a
+	// currency. Each deal still carries its own currency; this is only the
+	// default. Guaranteed to be a supported code (validated at config load).
+	DefaultCurrency string
 }
 
 type CargoService struct {
@@ -50,10 +58,29 @@ type CargoService struct {
 	cfg      CargoServiceConfig
 	matcher  *matching.Client
 	payments payment.Provider
+	storage  *storage.S3Client
 }
 
-func NewCargoService(db *pgxpool.Pool, cfg CargoServiceConfig, matcher *matching.Client, payments payment.Provider) *CargoService {
-	return &CargoService{db: db, cfg: cfg, matcher: matcher, payments: payments}
+func NewCargoService(db *pgxpool.Pool, cfg CargoServiceConfig, matcher *matching.Client, payments payment.Provider, stores ...*storage.S3Client) *CargoService {
+	var documentStorage *storage.S3Client
+	if len(stores) > 0 {
+		documentStorage = stores[0]
+	}
+	return &CargoService{db: db, cfg: cfg, matcher: matcher, payments: payments, storage: documentStorage}
+}
+
+// resolveCurrency validates a submitted currency code. An empty code falls
+// back to the platform default; a non-empty but unsupported code is rejected.
+// The return is always an upper-case supported ISO-4217 code.
+func (s *CargoService) resolveCurrency(code string) (string, error) {
+	if strings.TrimSpace(code) == "" {
+		return s.cfg.DefaultCurrency, nil
+	}
+	c := money.Normalize(code)
+	if c == "" {
+		return "", fmt.Errorf("%w: unsupported currency %q", ErrInvalidInput, code)
+	}
+	return c, nil
 }
 
 func matchingParams(maxVolume, maxWeight float64, cfg CargoServiceConfig) matching.MatchParams {
@@ -94,7 +121,52 @@ type CreateCargoRequestInput struct {
 	Destination models.GeoPoint
 	VolumeM3    float64
 	WeightKg    float64
+	Category    models.CargoCategory
 	Description string
+
+	// Logistics detail (see models.CargoRequest).
+	Packaging   models.CargoPackaging
+	PlacesCount int
+	Stackable   bool
+	ADRRequired bool
+	Items       []models.CargoRequestItem
+}
+
+func validateCargoDetails(category models.CargoCategory, description string) error {
+	if !models.IsValidCargoCategory(category) {
+		return fmt.Errorf("%w: invalid cargo category", ErrInvalidInput)
+	}
+	if category == models.CargoCategoryOther && len(strings.TrimSpace(description)) == 0 {
+		return fmt.Errorf("%w: description is required for other category", ErrInvalidInput)
+	}
+	return nil
+}
+
+// normalizeCargoLogistics validates and normalizes the packaging fields: bulk
+// cargo has no discrete places, packaged cargo carries per-place dimensions and
+// a places count at least as large as the listed packages.
+func normalizeCargoLogistics(in *CreateCargoRequestInput) error {
+	if in.Packaging == "" {
+		in.Packaging = models.CargoPackaged
+	}
+	if !models.IsValidCargoPackaging(in.Packaging) {
+		return fmt.Errorf("%w: packaging must be \"packaged\" or \"bulk\"", ErrInvalidInput)
+	}
+	if in.Packaging == models.CargoBulk {
+		in.PlacesCount = 0
+		in.Items = nil
+		return nil
+	}
+	for i := range in.Items {
+		in.Items[i].Position = i
+	}
+	if in.PlacesCount < len(in.Items) {
+		in.PlacesCount = len(in.Items)
+	}
+	if in.PlacesCount < 0 {
+		in.PlacesCount = 0
+	}
+	return nil
 }
 
 // CreateCargoRequest is the free client action — no tool required, only an
@@ -115,6 +187,12 @@ func (s *CargoService) CreateCargoRequest(ctx context.Context, clientID uuid.UUI
 	if in.WeightKg <= 0 {
 		return nil, fmt.Errorf("%w: weight_kg must be positive", ErrInvalidInput)
 	}
+	if err := validateCargoDetails(in.Category, in.Description); err != nil {
+		return nil, err
+	}
+	if err := normalizeCargoLogistics(&in); err != nil {
+		return nil, err
+	}
 
 	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
 		return nil, err
@@ -127,13 +205,27 @@ func (s *CargoService) CreateCargoRequest(ctx context.Context, clientID uuid.UUI
 		Destination: destination,
 		VolumeM3:    in.VolumeM3,
 		WeightKg:    in.WeightKg,
+		Category:    in.Category,
 		Description: in.Description,
 		Status:      models.CargoRequestOpen,
 		CreatedAt:   time.Now(),
+		Packaging:   in.Packaging,
+		PlacesCount: in.PlacesCount,
+		Stackable:   in.Stackable,
+		ADRRequired: in.ADRRequired,
+		Items:       in.Items,
 	}
 
-	cargoRepo := repository.NewCargoRequestRepository(s.db)
-	if err := cargoRepo.Create(ctx, cargo); err != nil {
+	// Cargo row and its package rows must land together.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err := repository.NewCargoRequestRepository(tx).Create(ctx, cargo); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 
@@ -146,8 +238,101 @@ func (s *CargoService) CreateCargoRequest(ctx context.Context, clientID uuid.UUI
 	if err := s.suggestConsolidations(ctx); err != nil {
 		log.Printf("cargo %s: suggest consolidations: %v", cargo.ID, err)
 	}
+	if err := s.notifyMatchingWarehousesOnCargo(ctx, cargo); err != nil {
+		log.Printf("cargo %s: notify matching warehouses: %v", cargo.ID, err)
+	}
 
 	return cargo, nil
+}
+
+func (s *CargoService) UpdateCargoRequest(ctx context.Context, clientID, cargoID uuid.UUID, in CreateCargoRequestInput) (*models.CargoRequest, error) {
+	origin, err := validateGeoPoint("origin", in.Origin)
+	if err != nil {
+		return nil, err
+	}
+	destination, err := validateGeoPoint("destination", in.Destination)
+	if err != nil {
+		return nil, err
+	}
+	if in.VolumeM3 <= 0 || in.WeightKg <= 0 {
+		return nil, fmt.Errorf("%w: volume_m3 and weight_kg must be positive", ErrInvalidInput)
+	}
+	if err := validateCargoDetails(in.Category, in.Description); err != nil {
+		return nil, err
+	}
+	if err := normalizeCargoLogistics(&in); err != nil {
+		return nil, err
+	}
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	repo := repository.NewCargoRequestRepository(tx)
+	cargo, err := repo.GetByIDForUpdate(ctx, cargoID)
+	if err != nil {
+		return nil, err
+	}
+	if cargo.ClientID != clientID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if cargo.Status != models.CargoRequestOpen {
+		return nil, ErrCargoNotOpen
+	}
+	cargo.Origin = origin
+	cargo.Destination = destination
+	cargo.VolumeM3 = in.VolumeM3
+	cargo.WeightKg = in.WeightKg
+	cargo.Category = in.Category
+	cargo.Description = in.Description
+	cargo.Packaging = in.Packaging
+	cargo.PlacesCount = in.PlacesCount
+	cargo.Stackable = in.Stackable
+	cargo.ADRRequired = in.ADRRequired
+	cargo.Items = in.Items
+	if err := repo.UpdateOpenOwned(ctx, cargo); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.suggestConsolidations(ctx); err != nil {
+		log.Printf("cargo %s: refresh consolidation suggestions after edit: %v", cargo.ID, err)
+	}
+	return cargo, nil
+}
+
+func (s *CargoService) CancelCargoRequest(ctx context.Context, clientID, cargoID uuid.UUID) error {
+	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	cargoRepo := repository.NewCargoRequestRepository(tx)
+	cargo, err := cargoRepo.GetByIDForUpdate(ctx, cargoID)
+	if err != nil {
+		return err
+	}
+	if cargo.ClientID != clientID {
+		return ErrForbiddenNotOwner
+	}
+	if cargo.Status != models.CargoRequestOpen {
+		return ErrCargoNotOpen
+	}
+	if err := cargoRepo.UpdateStatus(ctx, cargoID, models.CargoRequestClosed); err != nil {
+		return err
+	}
+	if err := repository.NewOfferRepository(tx).RejectSubmittedForCargo(ctx, cargoID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // notifyMatchingParticipants fans out a new-cargo notification to every
@@ -176,6 +361,9 @@ func (s *CargoService) notifyMatchingParticipants(ctx context.Context, cargo *mo
 
 	notifRepo := repository.NewNotificationRepository(s.db)
 	for _, userID := range userIDs {
+		if userID == cargo.ClientID {
+			continue
+		}
 		n := &models.Notification{
 			ID:        uuid.New(),
 			UserID:    userID,
@@ -203,7 +391,7 @@ func (s *CargoService) ListMyCargoRequests(ctx context.Context, clientID uuid.UU
 // receive_cargo_by_route tool AND at least one route within the per-country
 // radius of both cargo endpoints (radius matching happens in SQL). A tooled
 // participant with no routes correctly sees an empty list.
-func (s *CargoService) ListAvailableCargoRequests(ctx context.Context, participantID uuid.UUID) ([]models.CargoRequest, error) {
+func (s *CargoService) ListAvailableCargoRequests(ctx context.Context, participantID uuid.UUID, from, to *models.GeoPoint) ([]models.CargoRequest, error) {
 	if _, err := s.requireEligibleUser(ctx, participantID); err != nil {
 		return nil, err
 	}
@@ -212,7 +400,59 @@ func (s *CargoService) ListAvailableCargoRequests(ctx context.Context, participa
 	}
 
 	cargoRepo := repository.NewCargoRequestRepository(s.db)
-	return cargoRepo.ListOpenMatchingUserRoutes(ctx, participantID, s.cfg.MatchRadiusCNKm, s.cfg.MatchRadiusKZKm)
+	return cargoRepo.SearchOpenPublicCargo(ctx, from, to, &participantID, s.cfg.MatchRadiusCNKm, s.cfg.MatchRadiusKZKm)
+}
+
+type CargoCompetitionResponse struct {
+	Offer          models.Offer          `json:"offer"`
+	DirectionLabel string                `json:"direction_label"`
+	Origin         *models.GeoPoint      `json:"origin,omitempty"`
+	Destination    *models.GeoPoint      `json:"destination,omitempty"`
+	Category       *models.CargoCategory `json:"category,omitempty"`
+	VolumeM3       float64               `json:"volume_m3"`
+	WeightKg       float64               `json:"weight_kg"`
+	IsConsolidated bool                  `json:"is_consolidated"`
+}
+
+func (s *CargoService) ListMyCargoCompetitionResponses(ctx context.Context, participantID uuid.UUID) ([]CargoCompetitionResponse, error) {
+	if _, err := s.requireEligibleUser(ctx, participantID); err != nil {
+		return nil, err
+	}
+	offers, err := repository.NewOfferRepository(s.db).ListByParticipantID(ctx, participantID)
+	if err != nil {
+		return nil, err
+	}
+	cargoRepo := repository.NewCargoRequestRepository(s.db)
+	consRepo := repository.NewConsolidationRepository(s.db)
+	items := make([]CargoCompetitionResponse, 0, len(offers))
+	for _, offer := range offers {
+		row := CargoCompetitionResponse{Offer: offer}
+		if offer.CargoRequestID != nil {
+			cargo, err := cargoRepo.GetByID(ctx, *offer.CargoRequestID)
+			if err != nil {
+				return nil, err
+			}
+			row.DirectionLabel = cargo.Origin.Label + " → " + cargo.Destination.Label
+			row.Origin = &cargo.Origin
+			row.Destination = &cargo.Destination
+			row.Category = &cargo.Category
+			row.VolumeM3 = cargo.VolumeM3
+			row.WeightKg = cargo.WeightKg
+		} else if offer.ConsolidatedRequestID != nil {
+			cons, err := consRepo.GetConsolidatedByID(ctx, *offer.ConsolidatedRequestID)
+			if err != nil {
+				return nil, err
+			}
+			row.DirectionLabel = cons.Origin.Label + " → " + cons.Destination.Label
+			row.Origin = &cons.Origin
+			row.Destination = &cons.Destination
+			row.VolumeM3 = cons.TotalVolumeM3
+			row.WeightKg = cons.TotalWeightKg
+			row.IsConsolidated = true
+		}
+		items = append(items, row)
+	}
+	return items, nil
 }
 
 // ListMyNotifications exists primarily so notification delivery is
@@ -246,6 +486,7 @@ func (s *CargoService) MarkMyNotificationsRead(ctx context.Context, userID uuid.
 
 type CreateOfferInput struct {
 	Price                float64
+	Currency             string
 	Conditions           string
 	WarehouseFillPercent *float64
 }
@@ -273,13 +514,21 @@ func (s *CargoService) CreateOffer(ctx context.Context, participantID, cargoRequ
 	if cargo.Status != models.CargoRequestOpen {
 		return nil, ErrCargoNotOpen
 	}
+	if cargo.ClientID == participantID {
+		return nil, fmt.Errorf("%w: cannot submit an offer to your own cargo request", ErrInvalidInput)
+	}
+
+	currency, err := s.resolveCurrency(in.Currency)
+	if err != nil {
+		return nil, err
+	}
 
 	offer := &models.Offer{
 		ID:                   uuid.New(),
 		CargoRequestID:       &cargoRequestID,
 		ParticipantID:        participantID,
 		Price:                in.Price,
-		Currency:             "KZT",
+		Currency:             currency,
 		Conditions:           in.Conditions,
 		WarehouseFillPercent: in.WarehouseFillPercent,
 		Status:               models.OfferSubmitted,
@@ -287,10 +536,95 @@ func (s *CargoService) CreateOffer(ctx context.Context, participantID, cargoRequ
 	}
 
 	offerRepo := repository.NewOfferRepository(s.db)
-	if err := offerRepo.Create(ctx, offer); err != nil {
+	return offerRepo.CreateOrUpdateSubmitted(ctx, offer)
+}
+
+func validateOfferInput(in CreateOfferInput) error {
+	if in.Price <= 0 {
+		return fmt.Errorf("%w: price must be positive", ErrInvalidInput)
+	}
+	if in.WarehouseFillPercent != nil && (*in.WarehouseFillPercent < 0 || *in.WarehouseFillPercent > 100) {
+		return fmt.Errorf("%w: warehouse_fill_percent must be between 0 and 100", ErrInvalidInput)
+	}
+	return nil
+}
+
+func (s *CargoService) ensureOfferTargetOpen(ctx context.Context, offer *models.Offer) error {
+	if offer.CargoRequestID != nil {
+		cargo, err := repository.NewCargoRequestRepository(s.db).GetByID(ctx, *offer.CargoRequestID)
+		if err != nil {
+			return err
+		}
+		if cargo.Status != models.CargoRequestOpen {
+			return ErrCargoNotOpen
+		}
+		return nil
+	}
+	if offer.ConsolidatedRequestID != nil {
+		cons, err := repository.NewConsolidationRepository(s.db).GetConsolidatedByID(ctx, *offer.ConsolidatedRequestID)
+		if err != nil {
+			return err
+		}
+		if cons.Status != models.CargoRequestOpen {
+			return ErrCargoNotOpen
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: offer has no target", ErrInvalidInput)
+}
+
+func (s *CargoService) UpdateMyOffer(ctx context.Context, participantID, offerID uuid.UUID, in CreateOfferInput) (*models.Offer, error) {
+	if err := validateOfferInput(in); err != nil {
 		return nil, err
 	}
-	return offer, nil
+	if _, err := s.requireEligibleUser(ctx, participantID); err != nil {
+		return nil, err
+	}
+	repo := repository.NewOfferRepository(s.db)
+	offer, err := repo.GetByID(ctx, offerID)
+	if err != nil {
+		return nil, err
+	}
+	if offer.ParticipantID != participantID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if offer.Status != models.OfferSubmitted {
+		return nil, ErrOfferNotEditable
+	}
+	if err := s.ensureOfferTargetOpen(ctx, offer); err != nil {
+		return nil, err
+	}
+	currency, err := s.resolveCurrency(in.Currency)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := repo.UpdateSubmittedOwned(ctx, offerID, participantID, in.Price, currency, in.Conditions, in.WarehouseFillPercent)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrOfferNotEditable
+	}
+	return updated, err
+}
+
+func (s *CargoService) WithdrawMyOffer(ctx context.Context, participantID, offerID uuid.UUID) (*models.Offer, error) {
+	if _, err := s.requireEligibleUser(ctx, participantID); err != nil {
+		return nil, err
+	}
+	repo := repository.NewOfferRepository(s.db)
+	offer, err := repo.GetByID(ctx, offerID)
+	if err != nil {
+		return nil, err
+	}
+	if offer.ParticipantID != participantID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if offer.Status != models.OfferSubmitted {
+		return nil, ErrOfferNotEditable
+	}
+	withdrawn, err := repo.WithdrawSubmittedOwned(ctx, offerID, participantID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrOfferNotEditable
+	}
+	return withdrawn, err
 }
 
 // AnonymizedOffer is what the client sees: enough to compare and decide,
@@ -301,18 +635,21 @@ func (s *CargoService) CreateOffer(ctx context.Context, participantID, cargoRequ
 // warehouse fill report as bare numbers — joined server-side so the client
 // never learns whose report it is.
 type AnonymizedOffer struct {
-	OfferID            uuid.UUID          `json:"offer_id"`
-	OfferNumber        int                `json:"offer_number"`
-	Rating             *float64           `json:"rating"`
-	RatingCount        int                `json:"rating_count"`
-	FillPercent        *float64           `json:"fill_percent,omitempty"`
-	LatestFillExpected *float64           `json:"latest_fill_expected,omitempty"`
-	LatestFillActual   *float64           `json:"latest_fill_actual,omitempty"`
+	OfferID            uuid.UUID `json:"offer_id"`
+	OfferNumber        int       `json:"offer_number"`
+	Rating             *float64  `json:"rating"`
+	RatingCount        int       `json:"rating_count"`
+	FillPercent        *float64  `json:"fill_percent,omitempty"`
+	LatestFillExpected *float64  `json:"latest_fill_expected,omitempty"`
+	LatestFillActual   *float64  `json:"latest_fill_actual,omitempty"`
 	// Dispatch* mirror the participant's «порог отправки» on their route
 	// matching this cargo direction (ТЗ §5.2: клиент видит, сколько кубов
 	// набрано и сколько осталось до отправки) — bare numbers, no identity.
-	DispatchThresholdM3 *float64 `json:"dispatch_threshold_m3,omitempty"`
-	DispatchAccruedM3   *float64 `json:"dispatch_accrued_m3,omitempty"`
+	DispatchThresholdM3 *float64   `json:"dispatch_threshold_m3,omitempty"`
+	DispatchAccruedM3   *float64   `json:"dispatch_accrued_m3,omitempty"`
+	DispatchRemainingM3 *float64   `json:"dispatch_remaining_m3,omitempty"`
+	DispatchDate        *time.Time `json:"dispatch_date,omitempty"`
+	DispatchStatus      string     `json:"dispatch_status,omitempty"`
 
 	Price    float64            `json:"price"`
 	Currency string             `json:"currency"`
@@ -390,9 +727,12 @@ func (s *CargoService) anonymizeOffers(ctx context.Context, offers []models.Offe
 			row.LatestFillActual = &actual
 		}
 		if t, ok := thresholds[o.ParticipantID]; ok {
-			threshold, accrued := t.ThresholdM3, t.AccruedM3
+			threshold, accrued, remaining := t.ThresholdM3, t.AccruedM3, t.RemainingM3
 			row.DispatchThresholdM3 = &threshold
 			row.DispatchAccruedM3 = &accrued
+			row.DispatchRemainingM3 = &remaining
+			row.DispatchDate = t.EstimatedDispatchDate
+			row.DispatchStatus = t.Status
 		}
 		anonymized = append(anonymized, row)
 	}

@@ -24,6 +24,8 @@ type Chat struct {
 	ConsolidatedRequestID *uuid.UUID `json:"consolidated_request_id,omitempty"`
 	DriverCompetitionID   *uuid.UUID `json:"driver_competition_id,omitempty"`
 	WarehouseBatchID      *uuid.UUID `json:"warehouse_batch_id,omitempty"`
+	TransportProposalID   *uuid.UUID `json:"transport_proposal_id,omitempty"`
+	WarehouseOfferID      *uuid.UUID `json:"warehouse_offer_id,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 }
 

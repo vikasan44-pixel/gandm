@@ -84,6 +84,9 @@ func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID
 	if offer.CargoRequestID == nil || *offer.CargoRequestID != cargoRequestID {
 		return nil, fmt.Errorf("%w: offer does not belong to this cargo request", ErrInvalidInput)
 	}
+	if offer.Status != models.OfferSubmitted {
+		return nil, ErrOfferNotEditable
+	}
 
 	revealRepo := repository.NewContactRevealRepository(tx)
 	used, err := revealRepo.CountByClientID(ctx, clientID)
@@ -107,7 +110,7 @@ func (s *CargoService) SelectOffer(ctx context.Context, clientID, cargoRequestID
 		return nil, err
 	}
 
-	if err := offerRepo.UpdateStatus(ctx, offerID, models.OfferSelected); err != nil {
+	if err := offerRepo.MarkSelectedForCargo(ctx, cargoRequestID, offerID); err != nil {
 		return nil, err
 	}
 	if err := cargoRepo.UpdateStatus(ctx, cargoRequestID, models.CargoRequestMatched); err != nil {

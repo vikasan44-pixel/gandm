@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"time"
@@ -47,7 +48,6 @@ func (s *AntifraudService) requireEligible(ctx context.Context, userID uuid.UUID
 	}
 	return nil
 }
-
 
 // AddFavorite: в избранное можно добавить только контрагента по
 // завершённой сделке — иначе избранное превратилось бы в канал деанона
@@ -226,13 +226,17 @@ func NotifyRepeatDeal(ctx context.Context, q repository.Querier, dealID, clientI
 	notifRepo := repository.NewNotificationRepository(q)
 	now := time.Now()
 	for _, uid := range []uuid.UUID{clientID, participantID} {
-		_ = notifRepo.Create(ctx, &models.Notification{
+		// Best-effort notification, but log failures instead of dropping them
+		// silently so a broken notification pipeline is visible.
+		if err := notifRepo.Create(ctx, &models.Notification{
 			ID:        uuid.New(),
 			UserID:    uid,
 			Type:      "repeat_deal_document_requested",
 			Payload:   payload,
 			IsRead:    false,
 			CreatedAt: now,
-		})
+		}); err != nil {
+			log.Printf("repeat-deal notification for %s: %v", uid, err)
+		}
 	}
 }

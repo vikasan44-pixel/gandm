@@ -26,8 +26,23 @@ func (h *CargoHandler) ListCustomsCompetitions(w http.ResponseWriter, r *http.Re
 	httpx.WriteJSON(w, http.StatusOK, items)
 }
 
+func (h *CargoHandler) ListMyCustomsCompetitionResponses(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	items, err := h.svc.ListMyCustomsCompetitionResponses(r.Context(), userID)
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, items)
+}
+
 type customsOfferRequest struct {
 	Price      float64 `json:"price"`
+	Currency   string  `json:"currency"`
 	Conditions string  `json:"conditions"`
 }
 
@@ -49,12 +64,55 @@ func (h *CargoHandler) CreateCustomsOffer(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	offer, err := h.svc.CreateCustomsOffer(r.Context(), userID, consolidatedID, req.Price, req.Conditions)
+	offer, err := h.svc.CreateCustomsOffer(r.Context(), userID, consolidatedID, req.Price, req.Currency, req.Conditions)
 	if err != nil {
 		writeCargoServiceError(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, offer)
+}
+
+func (h *CargoHandler) UpdateMyCustomsOffer(w http.ResponseWriter, r *http.Request) {
+	offerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid customs offer id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	var req customsOfferRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "malformed JSON body")
+		return
+	}
+	offer, err := h.svc.UpdateMyCustomsOffer(r.Context(), userID, offerID, req.Price, req.Currency, req.Conditions)
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, offer)
+}
+
+func (h *CargoHandler) WithdrawMyCustomsOffer(w http.ResponseWriter, r *http.Request) {
+	offerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid customs offer id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	offer, err := h.svc.WithdrawMyCustomsOffer(r.Context(), userID, offerID)
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, offer)
 }
 
 func (h *CargoHandler) ListCustomsOffers(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,12 +28,13 @@ var (
 // direction, totals and cargo names («упаковочный лист») — no personal data
 // of the clients (ТЗ §10.2).
 type CustomsCompetition struct {
-	ConsolidatedRequestID uuid.UUID `json:"consolidated_request_id"`
-	DirectionLabel        string    `json:"direction_label"`
-	TotalVolumeM3         float64   `json:"total_volume_m3"`
-	TotalWeightKg         float64   `json:"total_weight_kg"`
-	CargoNames            []string  `json:"cargo_names"`
-	CreatedAt             time.Time `json:"created_at"`
+	ConsolidatedRequestID uuid.UUID                 `json:"consolidated_request_id"`
+	DirectionLabel        string                    `json:"direction_label"`
+	TotalVolumeM3         float64                   `json:"total_volume_m3"`
+	TotalWeightKg         float64                   `json:"total_weight_kg"`
+	CargoNames            []string                  `json:"cargo_names"`
+	CargoItems            []models.CargoItemSummary `json:"cargo_items"`
+	CreatedAt             time.Time                 `json:"created_at"`
 	// MyOffer is the rep's own bid on this competition, if any.
 	MyOffer *models.ConsolidatedCustomsOffer `json:"my_offer,omitempty"`
 }
@@ -64,7 +66,7 @@ func (s *CargoService) notifyCustomsReps(ctx context.Context, q repository.Queri
 	}
 
 	consRepo := repository.NewConsolidationRepository(q)
-	cargoNames, err := consRepo.ListMemberDescriptions(ctx, cons.ID)
+	cargoItems, err := consRepo.ListMemberCargoItems(ctx, cons.ID)
 	if err != nil {
 		return err
 	}
@@ -74,7 +76,8 @@ func (s *CargoService) notifyCustomsReps(ctx context.Context, q repository.Queri
 		"direction_label":         cons.Origin.Label + " → " + cons.Destination.Label,
 		"total_volume_m3":         cons.TotalVolumeM3,
 		"total_weight_kg":         cons.TotalWeightKg,
-		"cargo_names":             cargoNames,
+		"cargo_names":             cargoDescriptions(cargoItems),
+		"cargo_items":             cargoItems,
 	})
 	if err != nil {
 		return err
@@ -121,7 +124,7 @@ func (s *CargoService) ListCustomsCompetitions(ctx context.Context, repID uuid.U
 	items := make([]CustomsCompetition, 0, len(consolidations))
 	for i := range consolidations {
 		cons := &consolidations[i]
-		cargoNames, err := consRepo.ListMemberDescriptions(ctx, cons.ID)
+		cargoItems, err := consRepo.ListMemberCargoItems(ctx, cons.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +133,8 @@ func (s *CargoService) ListCustomsCompetitions(ctx context.Context, repID uuid.U
 			DirectionLabel:        cons.Origin.Label + " → " + cons.Destination.Label,
 			TotalVolumeM3:         cons.TotalVolumeM3,
 			TotalWeightKg:         cons.TotalWeightKg,
-			CargoNames:            cargoNames,
+			CargoNames:            cargoDescriptions(cargoItems),
+			CargoItems:            cargoItems,
 			CreatedAt:             cons.CreatedAt,
 		}
 		if offer, ok := myOffers[cons.ID]; ok {
@@ -142,10 +146,53 @@ func (s *CargoService) ListCustomsCompetitions(ctx context.Context, repID uuid.U
 	return items, nil
 }
 
+// ListMyCustomsCompetitionResponses includes selected/rejected offers whose
+// competition is no longer present in the open customs feed.
+func (s *CargoService) ListMyCustomsCompetitionResponses(ctx context.Context, repID uuid.UUID) ([]CustomsCompetition, error) {
+	if err := s.requireActiveUser(ctx, repID); err != nil {
+		return nil, err
+	}
+	if err := s.requireTool(ctx, repID, ToolManageCustomsDocs); err != nil {
+		return nil, err
+	}
+	consRepo := repository.NewConsolidationRepository(s.db)
+	offers, err := repository.NewCustomsOfferRepository(s.db).ListByRepID(ctx, repID)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]CustomsCompetition, 0, len(offers))
+	for consolidatedID, offer := range offers {
+		cons, err := consRepo.GetConsolidatedByID(ctx, consolidatedID)
+		if err != nil {
+			return nil, err
+		}
+		cargoItems, err := consRepo.ListMemberCargoItems(ctx, cons.ID)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, CustomsCompetition{ConsolidatedRequestID: cons.ID, DirectionLabel: cons.Origin.Label + " → " + cons.Destination.Label, TotalVolumeM3: cons.TotalVolumeM3, TotalWeightKg: cons.TotalWeightKg, CargoNames: cargoDescriptions(cargoItems), CargoItems: cargoItems, CreatedAt: cons.CreatedAt, MyOffer: &offer})
+	}
+	return items, nil
+}
+
+func cargoDescriptions(items []models.CargoItemSummary) []string {
+	descriptions := make([]string, 0, len(items))
+	for _, item := range items {
+		if value := strings.TrimSpace(item.Description); value != "" {
+			descriptions = append(descriptions, value)
+		}
+	}
+	return descriptions
+}
+
 // CreateCustomsOffer: a tooled rep bids on a matched consolidation.
-func (s *CargoService) CreateCustomsOffer(ctx context.Context, repID, consolidatedID uuid.UUID, price float64, conditions string) (*models.ConsolidatedCustomsOffer, error) {
+func (s *CargoService) CreateCustomsOffer(ctx context.Context, repID, consolidatedID uuid.UUID, price float64, currency, conditions string) (*models.ConsolidatedCustomsOffer, error) {
 	if price <= 0 {
 		return nil, fmt.Errorf("%w: price must be positive", ErrInvalidInput)
+	}
+	cur, err := s.resolveCurrency(currency)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.requireActiveUser(ctx, repID); err != nil {
 		return nil, err
@@ -177,7 +224,7 @@ func (s *CargoService) CreateCustomsOffer(ctx context.Context, repID, consolidat
 		ConsolidatedRequestID: consolidatedID,
 		CustomsRepID:          repID,
 		Price:                 price,
-		Currency:              "KZT",
+		Currency:              cur,
 		Conditions:            conditions,
 		Status:                models.CustomsOfferSubmitted,
 		CreatedAt:             time.Now(),
@@ -185,7 +232,70 @@ func (s *CargoService) CreateCustomsOffer(ctx context.Context, repID, consolidat
 	if err := customsRepo.Create(ctx, offer); err != nil {
 		return nil, err
 	}
-	return offer, nil
+	saved, err := customsRepo.ListByRepID(ctx, repID)
+	if err != nil {
+		return nil, err
+	}
+	result := saved[consolidatedID]
+	return &result, nil
+}
+
+func (s *CargoService) UpdateMyCustomsOffer(ctx context.Context, repID, offerID uuid.UUID, price float64, currency, conditions string) (*models.ConsolidatedCustomsOffer, error) {
+	if price <= 0 {
+		return nil, fmt.Errorf("%w: price must be positive", ErrInvalidInput)
+	}
+	cur, err := s.resolveCurrency(currency)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireActiveUser(ctx, repID); err != nil {
+		return nil, err
+	}
+	repo := repository.NewCustomsOfferRepository(s.db)
+	offer, err := repo.GetByID(ctx, offerID)
+	if err != nil {
+		return nil, err
+	}
+	if offer.CustomsRepID != repID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if offer.Status != models.CustomsOfferSubmitted {
+		return nil, ErrOfferNotEditable
+	}
+	selected, err := repo.HasSelected(ctx, offer.ConsolidatedRequestID)
+	if err != nil {
+		return nil, err
+	}
+	if selected {
+		return nil, ErrOfferNotEditable
+	}
+	updated, err := repo.UpdateSubmittedOwned(ctx, offerID, repID, price, cur, strings.TrimSpace(conditions))
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrOfferNotEditable
+	}
+	return updated, err
+}
+
+func (s *CargoService) WithdrawMyCustomsOffer(ctx context.Context, repID, offerID uuid.UUID) (*models.ConsolidatedCustomsOffer, error) {
+	if err := s.requireActiveUser(ctx, repID); err != nil {
+		return nil, err
+	}
+	repo := repository.NewCustomsOfferRepository(s.db)
+	offer, err := repo.GetByID(ctx, offerID)
+	if err != nil {
+		return nil, err
+	}
+	if offer.CustomsRepID != repID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if offer.Status != models.CustomsOfferSubmitted {
+		return nil, ErrOfferNotEditable
+	}
+	withdrawn, err := repo.WithdrawSubmittedOwned(ctx, offerID, repID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrOfferNotEditable
+	}
+	return withdrawn, err
 }
 
 // ListCustomsOffersForClient: consolidation members compare the clearance
@@ -298,6 +408,9 @@ func (s *CargoService) SelectCustomsOffer(ctx context.Context, clientID, consoli
 			Contact:      RevealedContact{CompanyName: rep.CompanyName, Email: rep.Email, Phone: rep.Phone},
 			CustomsRepID: rep.ID,
 		}, nil
+	}
+	if offer.Status != models.CustomsOfferSubmitted {
+		return nil, ErrOfferNotEditable
 	}
 
 	selected, err := customsRepo.HasSelected(ctx, consolidatedID)

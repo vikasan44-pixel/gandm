@@ -51,7 +51,34 @@ type createCargoRequestRequest struct {
 	Destination geoPointPayload `json:"destination"`
 	VolumeM3    float64         `json:"volume_m3"`
 	WeightKg    float64         `json:"weight_kg"`
+	Category    string          `json:"category"`
 	Description string          `json:"description"`
+
+	Packaging   string                `json:"packaging"`
+	PlacesCount int                   `json:"places_count"`
+	Stackable   bool                  `json:"stackable"`
+	ADRRequired bool                  `json:"adr_required"`
+	Items       []proposalItemPayload `json:"items"`
+}
+
+func (req createCargoRequestRequest) toInput() service.CreateCargoRequestInput {
+	items := make([]models.CargoRequestItem, 0, len(req.Items))
+	for _, it := range req.Items {
+		items = append(items, models.CargoRequestItem{LengthM: it.LengthM, WidthM: it.WidthM, HeightM: it.HeightM})
+	}
+	return service.CreateCargoRequestInput{
+		Origin:      req.Origin.toModel(),
+		Destination: req.Destination.toModel(),
+		VolumeM3:    req.VolumeM3,
+		WeightKg:    req.WeightKg,
+		Category:    models.CargoCategory(req.Category),
+		Description: req.Description,
+		Packaging:   models.CargoPackaging(req.Packaging),
+		PlacesCount: req.PlacesCount,
+		Stackable:   req.Stackable,
+		ADRRequired: req.ADRRequired,
+		Items:       items,
+	}
 }
 
 func (h *CargoHandler) CreateCargoRequest(w http.ResponseWriter, r *http.Request) {
@@ -67,18 +94,54 @@ func (h *CargoHandler) CreateCargoRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cargo, err := h.svc.CreateCargoRequest(r.Context(), userID, service.CreateCargoRequestInput{
-		Origin:      req.Origin.toModel(),
-		Destination: req.Destination.toModel(),
-		VolumeM3:    req.VolumeM3,
-		WeightKg:    req.WeightKg,
-		Description: req.Description,
-	})
+	cargo, err := h.svc.CreateCargoRequest(r.Context(), userID, req.toInput())
 	if err != nil {
 		writeCargoServiceError(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, cargo)
+}
+
+func (h *CargoHandler) UpdateCargoRequest(w http.ResponseWriter, r *http.Request) {
+	cargoID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid cargo request id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	var req createCargoRequestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "malformed JSON body")
+		return
+	}
+	cargo, err := h.svc.UpdateCargoRequest(r.Context(), userID, cargoID, req.toInput())
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, cargo)
+}
+
+func (h *CargoHandler) CancelCargoRequest(w http.ResponseWriter, r *http.Request) {
+	cargoID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid cargo request id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	if err := h.svc.CancelCargoRequest(r.Context(), userID, cargoID); err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "closed"})
 }
 
 func (h *CargoHandler) ListMyCargoRequests(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +166,36 @@ func (h *CargoHandler) ListAvailableCargoRequests(w http.ResponseWriter, r *http
 		return
 	}
 
-	items, err := h.svc.ListAvailableCargoRequests(r.Context(), userID)
+	from, err := geoPointFromQuery(r, "from")
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", err.Error())
+		return
+	}
+	to, err := geoPointFromQuery(r, "to")
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", err.Error())
+		return
+	}
+	items, err := h.svc.ListAvailableCargoRequests(
+		r.Context(),
+		userID,
+		from,
+		to,
+	)
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, items)
+}
+
+func (h *CargoHandler) ListMyCargoCompetitionResponses(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	items, err := h.svc.ListMyCargoCompetitionResponses(r.Context(), userID)
 	if err != nil {
 		writeCargoServiceError(w, err)
 		return
@@ -113,6 +205,7 @@ func (h *CargoHandler) ListAvailableCargoRequests(w http.ResponseWriter, r *http
 
 type createOfferRequest struct {
 	Price                float64  `json:"price"`
+	Currency             string   `json:"currency"`
 	Conditions           string   `json:"conditions"`
 	WarehouseFillPercent *float64 `json:"warehouse_fill_percent"`
 }
@@ -137,6 +230,7 @@ func (h *CargoHandler) CreateOffer(w http.ResponseWriter, r *http.Request) {
 
 	offer, err := h.svc.CreateOffer(r.Context(), userID, cargoID, service.CreateOfferInput{
 		Price:                req.Price,
+		Currency:             req.Currency,
 		Conditions:           req.Conditions,
 		WarehouseFillPercent: req.WarehouseFillPercent,
 	})
@@ -145,6 +239,51 @@ func (h *CargoHandler) CreateOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, offer)
+}
+
+func (h *CargoHandler) UpdateMyOffer(w http.ResponseWriter, r *http.Request) {
+	offerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid offer id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	var req createOfferRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "malformed JSON body")
+		return
+	}
+	offer, err := h.svc.UpdateMyOffer(r.Context(), userID, offerID, service.CreateOfferInput{
+		Price: req.Price, Currency: req.Currency, Conditions: req.Conditions, WarehouseFillPercent: req.WarehouseFillPercent,
+	})
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, offer)
+}
+
+func (h *CargoHandler) WithdrawMyOffer(w http.ResponseWriter, r *http.Request) {
+	offerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_id", "invalid offer id")
+		return
+	}
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
+		return
+	}
+	offer, err := h.svc.WithdrawMyOffer(r.Context(), userID, offerID)
+	if err != nil {
+		writeCargoServiceError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, offer)
 }
 
 func (h *CargoHandler) ListOffersForCargo(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +318,8 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusForbidden, "forbidden", "you don't have access to this resource")
 	case errors.Is(err, service.ErrCargoNotOpen):
 		httpx.WriteError(w, http.StatusConflict, "cargo_not_open", "this cargo request is no longer open")
+	case errors.Is(err, service.ErrOfferNotEditable):
+		httpx.WriteError(w, http.StatusConflict, "offer_not_editable", "this offer can no longer be changed")
 	case errors.Is(err, service.ErrContactLimitReached):
 		httpx.WriteError(w, http.StatusTooManyRequests, "contact_limit_reached", "contact reveal limit reached for this account")
 	case errors.Is(err, repository.ErrAlreadyRevealed):
@@ -209,6 +350,14 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "route_exists", "this route is already added")
 	case errors.Is(err, service.ErrVehicleLimitReached):
 		httpx.WriteError(w, http.StatusConflict, "vehicle_limit_reached", "vehicle limit reached for this account")
+	case errors.Is(err, service.ErrVehicleTripOriginTooFar):
+		httpx.WriteError(w, http.StatusBadRequest, "vehicle_trip_origin_too_far", "trip origin must be within the matching radius of the vehicle location")
+	case errors.Is(err, repository.ErrVehicleIdentityTaken):
+		httpx.WriteError(w, http.StatusConflict, "vehicle_identity_taken", "vehicle plate or VIN is already registered")
+	case errors.Is(err, repository.ErrVehicleTripDateConflict):
+		httpx.WriteError(w, http.StatusConflict, "vehicle_trip_date_conflict", "this vehicle already has a trip on the selected date")
+	case errors.Is(err, repository.ErrVehicleActiveTrip):
+		httpx.WriteError(w, http.StatusConflict, "vehicle_active_trip_conflict", "this vehicle already has an active trip")
 	case errors.Is(err, service.ErrConsolidationNotMatched):
 		httpx.WriteError(w, http.StatusConflict, "not_matched", "the consolidation is not matched yet")
 	case errors.Is(err, service.ErrCustomsAlreadySelected):
@@ -223,6 +372,22 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "no_vehicles", "add at least one vehicle to bid")
 	case errors.Is(err, service.ErrEmployeeOfEmployee):
 		httpx.WriteError(w, http.StatusForbidden, "employee_of_employee", "employees cannot create their own employees")
+	case errors.Is(err, service.ErrProposalNotParty):
+		httpx.WriteError(w, http.StatusForbidden, "proposal_not_party", "you are not a party to this proposal")
+	case errors.Is(err, service.ErrProposalWrongState):
+		httpx.WriteError(w, http.StatusConflict, "proposal_wrong_state", "proposal is not in a state that allows this action")
+	case errors.Is(err, service.ErrProposalToOwnVehicle):
+		httpx.WriteError(w, http.StatusBadRequest, "proposal_own_vehicle", "cannot send a proposal to your own vehicle")
+	case errors.Is(err, service.ErrConsolidationRouteMismatch):
+		httpx.WriteError(w, http.StatusConflict, "consolidation_route_mismatch", "cargo route does not match this consolidation")
+	case errors.Is(err, service.ErrWarehouseNotEligibleForCargo):
+		httpx.WriteError(w, http.StatusConflict, "warehouse_not_eligible", "this warehouse cannot collect this cargo")
+	case errors.Is(err, service.ErrWarehouseNotPublished):
+		httpx.WriteError(w, http.StatusConflict, "warehouse_not_published", "warehouse must be published with pickup enabled")
+	case errors.Is(err, service.ErrWarehouseOfferWrongState):
+		httpx.WriteError(w, http.StatusConflict, "warehouse_offer_wrong_state", "warehouse offer is not in the required state")
+	case errors.Is(err, repository.ErrWarehouseAlreadyOffered):
+		httpx.WriteError(w, http.StatusConflict, "warehouse_already_offered", "this warehouse already offered on this cargo")
 	case errors.Is(err, repository.ErrEmailTaken):
 		httpx.WriteError(w, http.StatusConflict, "email_taken", "email is already registered")
 	case errors.Is(err, repository.ErrNotFound):

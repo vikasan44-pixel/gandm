@@ -87,6 +87,26 @@ func (r *DriverCompetitionRepository) Close(ctx context.Context, id uuid.UUID) e
 	return nil
 }
 
+func (r *DriverCompetitionRepository) UpdateOpenOwned(ctx context.Context, id, warehouseID, routeID uuid.UUID, volumeM3 float64, dispatchDate string) (*models.DriverCompetition, error) {
+	q := `UPDATE driver_competitions
+		SET route_id = $3, volume_m3 = $4, dispatch_date = $5
+		WHERE id = $1 AND warehouse_id = $2 AND status = 'open'
+		RETURNING ` + driverCompetitionColumns
+	return scanDriverCompetition(r.db.QueryRow(ctx, q, id, warehouseID, routeID, volumeM3, dispatchDate))
+}
+
+func (r *DriverCompetitionRepository) CancelOpenOwned(ctx context.Context, id, warehouseID uuid.UUID) error {
+	tag, err := r.db.Exec(ctx, `UPDATE driver_competitions SET status = 'closed' WHERE id = $1 AND warehouse_id = $2 AND status = 'open'`, id, warehouseID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	_, err = r.db.Exec(ctx, `UPDATE driver_competition_bids SET status = 'rejected' WHERE competition_id = $1 AND status = 'submitted'`, id)
+	return err
+}
+
 func (r *DriverCompetitionRepository) query(ctx context.Context, q string, args ...any) ([]models.DriverCompetition, error) {
 	rows, err := r.db.Query(ctx, q, args...)
 	if err != nil {
@@ -113,8 +133,14 @@ func (r *DriverCompetitionRepository) CreateBid(ctx context.Context, b *models.D
 	const q = `
 		INSERT INTO driver_competition_bids (id, competition_id, driver_id, price, currency, comment, status, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (competition_id, driver_id) DO UPDATE SET
+			price = EXCLUDED.price,
+			currency = EXCLUDED.currency,
+			comment = EXCLUDED.comment,
+			status = 'submitted'
+		WHERE driver_competition_bids.status IN ('submitted', 'withdrawn')
 	`
-	_, err := r.db.Exec(ctx, q, b.ID, b.CompetitionID, b.DriverID, b.Price, b.Currency, b.Comment, b.Status, b.CreatedAt)
+	tag, err := r.db.Exec(ctx, q, b.ID, b.CompetitionID, b.DriverID, b.Price, b.Currency, b.Comment, b.Status, b.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -122,7 +148,40 @@ func (r *DriverCompetitionRepository) CreateBid(ctx context.Context, b *models.D
 		}
 		return err
 	}
+	if tag.RowsAffected() == 0 {
+		return ErrAlreadyBid
+	}
 	return nil
+}
+
+func (r *DriverCompetitionRepository) UpdateSubmittedBidOwned(ctx context.Context, id, driverID uuid.UUID, price float64, currency, comment string) (*models.DriverCompetitionBid, error) {
+	q := `UPDATE driver_competition_bids SET price = $3, currency = $4, comment = $5
+		WHERE id = $1 AND driver_id = $2 AND status = 'submitted'
+		RETURNING ` + driverBidColumns
+	var b models.DriverCompetitionBid
+	err := r.db.QueryRow(ctx, q, id, driverID, price, currency, comment).Scan(&b.ID, &b.CompetitionID, &b.DriverID, &b.Price, &b.Currency, &b.Comment, &b.Status, &b.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (r *DriverCompetitionRepository) WithdrawSubmittedBidOwned(ctx context.Context, id, driverID uuid.UUID) (*models.DriverCompetitionBid, error) {
+	q := `UPDATE driver_competition_bids SET status = 'withdrawn'
+		WHERE id = $1 AND driver_id = $2 AND status = 'submitted'
+		RETURNING ` + driverBidColumns
+	var b models.DriverCompetitionBid
+	err := r.db.QueryRow(ctx, q, id, driverID).Scan(&b.ID, &b.CompetitionID, &b.DriverID, &b.Price, &b.Currency, &b.Comment, &b.Status, &b.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
 }
 
 func (r *DriverCompetitionRepository) GetBidByID(ctx context.Context, id uuid.UUID) (*models.DriverCompetitionBid, error) {
@@ -140,7 +199,7 @@ func (r *DriverCompetitionRepository) GetBidByID(ctx context.Context, id uuid.UU
 
 // ListBidsByCompetitionID: oldest-first — stable anonymous numbering.
 func (r *DriverCompetitionRepository) ListBidsByCompetitionID(ctx context.Context, competitionID uuid.UUID) ([]models.DriverCompetitionBid, error) {
-	q := `SELECT ` + driverBidColumns + ` FROM driver_competition_bids WHERE competition_id = $1 ORDER BY created_at ASC`
+	q := `SELECT ` + driverBidColumns + ` FROM driver_competition_bids WHERE competition_id = $1 AND status != 'withdrawn' ORDER BY created_at ASC`
 	rows, err := r.db.Query(ctx, q, competitionID)
 	if err != nil {
 		return nil, err

@@ -30,6 +30,7 @@ const (
 	DriverBidSubmitted DriverBidStatus = "submitted"
 	DriverBidSelected  DriverBidStatus = "selected"
 	DriverBidRejected  DriverBidStatus = "rejected"
+	DriverBidWithdrawn DriverBidStatus = "withdrawn"
 )
 
 // DriverCompetitionBid — ценовое предложение водителя. Один водитель —

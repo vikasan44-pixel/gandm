@@ -12,6 +12,7 @@ const (
 	CustomsOfferSubmitted CustomsOfferStatus = "submitted"
 	CustomsOfferSelected  CustomsOfferStatus = "selected"
 	CustomsOfferRejected  CustomsOfferStatus = "rejected"
+	CustomsOfferWithdrawn CustomsOfferStatus = "withdrawn"
 )
 
 // ConsolidatedCustomsOffer is a customs representative's bid for clearing a

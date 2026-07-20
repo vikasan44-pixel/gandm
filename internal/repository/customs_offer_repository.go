@@ -39,8 +39,14 @@ func (r *CustomsOfferRepository) Create(ctx context.Context, o *models.Consolida
 	const q = `
 		INSERT INTO consolidated_customs_offers (id, consolidated_request_id, customs_rep_id, price, currency, conditions, status, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (consolidated_request_id, customs_rep_id) DO UPDATE SET
+			price = EXCLUDED.price,
+			currency = EXCLUDED.currency,
+			conditions = EXCLUDED.conditions,
+			status = 'submitted'
+		WHERE consolidated_customs_offers.status IN ('submitted', 'withdrawn')
 	`
-	_, err := r.db.Exec(ctx, q, o.ID, o.ConsolidatedRequestID, o.CustomsRepID, o.Price, o.Currency, o.Conditions, o.Status, o.CreatedAt)
+	tag, err := r.db.Exec(ctx, q, o.ID, o.ConsolidatedRequestID, o.CustomsRepID, o.Price, o.Currency, o.Conditions, o.Status, o.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -48,7 +54,32 @@ func (r *CustomsOfferRepository) Create(ctx context.Context, o *models.Consolida
 		}
 		return err
 	}
+	if tag.RowsAffected() == 0 {
+		return ErrAlreadyOffered
+	}
 	return nil
+}
+
+func (r *CustomsOfferRepository) UpdateSubmittedOwned(ctx context.Context, id, repID uuid.UUID, price float64, currency, conditions string) (*models.ConsolidatedCustomsOffer, error) {
+	q := `UPDATE consolidated_customs_offers SET price = $3, currency = $4, conditions = $5
+		WHERE id = $1 AND customs_rep_id = $2 AND status = 'submitted'
+		RETURNING ` + customsOfferColumns
+	o, err := scanCustomsOffer(r.db.QueryRow(ctx, q, id, repID, price, currency, conditions))
+	if err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
+func (r *CustomsOfferRepository) WithdrawSubmittedOwned(ctx context.Context, id, repID uuid.UUID) (*models.ConsolidatedCustomsOffer, error) {
+	q := `UPDATE consolidated_customs_offers SET status = 'withdrawn'
+		WHERE id = $1 AND customs_rep_id = $2 AND status = 'submitted'
+		RETURNING ` + customsOfferColumns
+	o, err := scanCustomsOffer(r.db.QueryRow(ctx, q, id, repID))
+	if err != nil {
+		return nil, err
+	}
+	return o, nil
 }
 
 func (r *CustomsOfferRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.ConsolidatedCustomsOffer, error) {
@@ -59,7 +90,7 @@ func (r *CustomsOfferRepository) GetByID(ctx context.Context, id uuid.UUID) (*mo
 // ListByConsolidatedID returns offers oldest-first — the stable order the
 // anonymous offer numbers derive from.
 func (r *CustomsOfferRepository) ListByConsolidatedID(ctx context.Context, consolidatedID uuid.UUID) ([]models.ConsolidatedCustomsOffer, error) {
-	q := `SELECT ` + customsOfferColumns + ` FROM consolidated_customs_offers WHERE consolidated_request_id = $1 ORDER BY created_at ASC`
+	q := `SELECT ` + customsOfferColumns + ` FROM consolidated_customs_offers WHERE consolidated_request_id = $1 AND status != 'withdrawn' ORDER BY created_at ASC`
 	rows, err := r.db.Query(ctx, q, consolidatedID)
 	if err != nil {
 		return nil, err

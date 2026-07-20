@@ -98,6 +98,64 @@ func (s *CargoService) CreateDriverCompetition(ctx context.Context, warehouseID,
 	return competition, nil
 }
 
+func (s *CargoService) UpdateDriverCompetition(ctx context.Context, warehouseID, competitionID, routeID uuid.UUID, volumeM3 float64, dispatchDate string) (*models.DriverCompetition, error) {
+	if volumeM3 <= 0 {
+		return nil, fmt.Errorf("%w: volume_m3 must be positive", ErrInvalidInput)
+	}
+	if err := s.requireActiveUser(ctx, warehouseID); err != nil {
+		return nil, err
+	}
+	if err := s.requireTool(ctx, warehouseID, ToolManageWarehouseSlots); err != nil {
+		return nil, err
+	}
+	route, err := repository.NewParticipantRouteRepository(s.db).GetByID(ctx, routeID)
+	if err != nil {
+		return nil, err
+	}
+	if route.UserID != warehouseID {
+		return nil, ErrForbiddenNotOwner
+	}
+	comp, err := repository.NewDriverCompetitionRepository(s.db).GetByID(ctx, competitionID)
+	if err != nil {
+		return nil, err
+	}
+	if comp.WarehouseID != warehouseID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if comp.Status != models.DriverCompetitionOpen {
+		return nil, ErrCompetitionClosed
+	}
+	updated, err := repository.NewDriverCompetitionRepository(s.db).UpdateOpenOwned(ctx, competitionID, warehouseID, routeID, volumeM3, strings.TrimSpace(dispatchDate))
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrCompetitionClosed
+	}
+	return updated, err
+}
+
+func (s *CargoService) CancelDriverCompetition(ctx context.Context, warehouseID, competitionID uuid.UUID) error {
+	if err := s.requireActiveUser(ctx, warehouseID); err != nil {
+		return err
+	}
+	if err := s.requireTool(ctx, warehouseID, ToolManageWarehouseSlots); err != nil {
+		return err
+	}
+	comp, err := repository.NewDriverCompetitionRepository(s.db).GetByID(ctx, competitionID)
+	if err != nil {
+		return err
+	}
+	if comp.WarehouseID != warehouseID {
+		return ErrForbiddenNotOwner
+	}
+	if comp.Status != models.DriverCompetitionOpen {
+		return ErrCompetitionClosed
+	}
+	if err := repository.NewDriverCompetitionRepository(s.db).CancelOpenOwned(ctx, competitionID, warehouseID); errors.Is(err, repository.ErrNotFound) {
+		return ErrCompetitionClosed
+	} else {
+		return err
+	}
+}
+
 func (s *CargoService) notifyDriversAboutCompetition(ctx context.Context, competition *models.DriverCompetition, route *models.ParticipantRoute) error {
 	toolRepo := repository.NewToolRepository(s.db)
 	driverIDs, err := toolRepo.ListUserIDsWithToolAndRoute(ctx, ToolManageFleet, route.Origin, route.Destination, s.cfg.MatchRadiusCNKm, s.cfg.MatchRadiusKZKm)
@@ -278,11 +336,45 @@ func (s *CargoService) ListOpenDriverCompetitions(ctx context.Context, driverID 
 	return items, nil
 }
 
+// ListMyDriverCompetitionResponses returns the driver's own bids including
+// closed competitions, so the cabinet keeps a complete response history.
+func (s *CargoService) ListMyDriverCompetitionResponses(ctx context.Context, driverID uuid.UUID) ([]OpenDriverCompetition, error) {
+	if err := s.requireActiveUser(ctx, driverID); err != nil {
+		return nil, err
+	}
+	if err := s.requireTool(ctx, driverID, ToolManageFleet); err != nil {
+		return nil, err
+	}
+	compRepo := repository.NewDriverCompetitionRepository(s.db)
+	bids, err := compRepo.ListBidsByDriverID(ctx, driverID)
+	if err != nil {
+		return nil, err
+	}
+	routeRepo := repository.NewParticipantRouteRepository(s.db)
+	items := make([]OpenDriverCompetition, 0, len(bids))
+	for competitionID, bid := range bids {
+		comp, err := compRepo.GetByID(ctx, competitionID)
+		if err != nil {
+			return nil, err
+		}
+		row := OpenDriverCompetition{CompetitionID: comp.ID, VolumeM3: comp.VolumeM3, DispatchDate: comp.DispatchDate, CreatedAt: comp.CreatedAt, MyBid: &bid}
+		if route, err := routeRepo.GetByID(ctx, comp.RouteID); err == nil {
+			row.DirectionLabel = routeDirectionLabel(route)
+		}
+		items = append(items, row)
+	}
+	return items, nil
+}
+
 // CreateDriverBid — водитель ставит цену. Нужна хотя бы одна машина в
 // автопарке: предложение без транспорта бессмысленно.
-func (s *CargoService) CreateDriverBid(ctx context.Context, driverID, competitionID uuid.UUID, price float64, comment string) (*models.DriverCompetitionBid, error) {
+func (s *CargoService) CreateDriverBid(ctx context.Context, driverID, competitionID uuid.UUID, price float64, currency, comment string) (*models.DriverCompetitionBid, error) {
 	if price <= 0 {
 		return nil, fmt.Errorf("%w: price must be positive", ErrInvalidInput)
+	}
+	cur, err := s.resolveCurrency(currency)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.requireActiveUser(ctx, driverID); err != nil {
 		return nil, err
@@ -315,7 +407,7 @@ func (s *CargoService) CreateDriverBid(ctx context.Context, driverID, competitio
 		CompetitionID: competitionID,
 		DriverID:      driverID,
 		Price:         price,
-		Currency:      "KZT",
+		Currency:      cur,
 		Comment:       strings.TrimSpace(comment),
 		Status:        models.DriverBidSubmitted,
 		CreatedAt:     time.Now(),
@@ -323,7 +415,70 @@ func (s *CargoService) CreateDriverBid(ctx context.Context, driverID, competitio
 	if err := compRepo.CreateBid(ctx, bid); err != nil {
 		return nil, err
 	}
-	return bid, nil
+	all, err := compRepo.ListBidsByDriverID(ctx, driverID)
+	if err != nil {
+		return nil, err
+	}
+	saved := all[competitionID]
+	return &saved, nil
+}
+
+func (s *CargoService) UpdateMyDriverBid(ctx context.Context, driverID, bidID uuid.UUID, price float64, currency, comment string) (*models.DriverCompetitionBid, error) {
+	if price <= 0 {
+		return nil, fmt.Errorf("%w: price must be positive", ErrInvalidInput)
+	}
+	cur, err := s.resolveCurrency(currency)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireActiveUser(ctx, driverID); err != nil {
+		return nil, err
+	}
+	repo := repository.NewDriverCompetitionRepository(s.db)
+	bid, err := repo.GetBidByID(ctx, bidID)
+	if err != nil {
+		return nil, err
+	}
+	if bid.DriverID != driverID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if bid.Status != models.DriverBidSubmitted {
+		return nil, ErrOfferNotEditable
+	}
+	competition, err := repo.GetByID(ctx, bid.CompetitionID)
+	if err != nil {
+		return nil, err
+	}
+	if competition.Status != models.DriverCompetitionOpen {
+		return nil, ErrCompetitionClosed
+	}
+	updated, err := repo.UpdateSubmittedBidOwned(ctx, bidID, driverID, price, cur, strings.TrimSpace(comment))
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrOfferNotEditable
+	}
+	return updated, err
+}
+
+func (s *CargoService) WithdrawMyDriverBid(ctx context.Context, driverID, bidID uuid.UUID) (*models.DriverCompetitionBid, error) {
+	if err := s.requireActiveUser(ctx, driverID); err != nil {
+		return nil, err
+	}
+	repo := repository.NewDriverCompetitionRepository(s.db)
+	bid, err := repo.GetBidByID(ctx, bidID)
+	if err != nil {
+		return nil, err
+	}
+	if bid.DriverID != driverID {
+		return nil, ErrForbiddenNotOwner
+	}
+	if bid.Status != models.DriverBidSubmitted {
+		return nil, ErrOfferNotEditable
+	}
+	withdrawn, err := repo.WithdrawSubmittedBidOwned(ctx, bidID, driverID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrOfferNotEditable
+	}
+	return withdrawn, err
 }
 
 type DriverSelectResult struct {
@@ -389,6 +544,9 @@ func (s *CargoService) SelectDriverBid(ctx context.Context, warehouseID, competi
 			DriverID: driver.ID,
 			ChatID:   chat.ID,
 		}, nil
+	}
+	if bid.Status != models.DriverBidSubmitted {
+		return nil, ErrOfferNotEditable
 	}
 
 	if err := compRepo.MarkBidSelected(ctx, competitionID, bidID); err != nil {

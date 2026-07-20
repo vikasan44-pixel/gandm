@@ -17,6 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,7 +31,9 @@ import (
 	"gandm/internal/repository"
 )
 
-const (
+// Defaults for local dev. seedAdminPassword can be overridden via
+// SEED_ADMIN_PASSWORD; the seed refuses to run against production entirely.
+var (
 	seedAdminEmail    = "admin@platform.local"
 	seedAdminPassword = "Admin12345!"
 	seedUserPassword  = "Test12345!"
@@ -39,6 +43,17 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println(".env not found, relying on process environment")
 	}
+
+	// Never create the well-known dev admin against a production environment.
+	if env := strings.ToLower(os.Getenv("APP_ENV")); env == "production" || env == "prod" {
+		log.Fatal("refusing to seed: APP_ENV is production (seed creates a known-credentials admin)")
+	}
+	// Allow overriding the admin password (e.g. staging) instead of the
+	// hardcoded dev default.
+	if p := os.Getenv("SEED_ADMIN_PASSWORD"); p != "" {
+		seedAdminPassword = p
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -95,28 +110,23 @@ func seedAdmin(ctx context.Context, db *pgxpool.Pool) (*models.Admin, error) {
 
 type toolSpec struct {
 	key, name, description, category string
+	active                           bool
 }
 
-// create_cargo_request and view_cargo_requests were seeded in Stage 1 as
-// placeholders for "the future cargo module". Stage 2 arrived with its own
-// tools (receive_cargo_by_route, submit_offer) that actually gate the real
-// endpoints — submitting a cargo request turned out to be a free action for
-// any eligible user, not tool-gated, so create_cargo_request in particular
-// is now unused. Left in place rather than deleted (Stage 1 data, not ours
-// to recreate) — deactivate it from the admin Tools screen if it's just
-// noise.
+// Historical placeholders remain in the catalog for referential integrity,
+// but are inactive and never offered during registration or tool selection.
 var baseTools = []toolSpec{
-	{"verify_participants", "Верификация участников", "Просмотр очереди верификации, одобрение и отклонение заявок", "admin"},
-	{"manage_tools", "Управление инструментами и наборами", "Создание инструментов, сборка наборов прав, назначение участникам", "admin"},
-	{"view_users", "Просмотр участников", "Просмотр списка и карточек участников платформы", "admin"},
-	{"create_cargo_request", "Создание заявки на груз", "Placeholder для будущего модуля заявок (Этап 2+)", "cargo"},
-	{"view_cargo_requests", "Просмотр заявок на груз", "Placeholder для будущего модуля заявок (Этап 2+)", "cargo"},
-	{"manage_warehouse_slots", "Управление складскими местами", "Placeholder для будущего складского модуля", "warehouse"},
-	{"manage_fleet", "Управление автопарком", "Placeholder для будущего модуля перевозчика", "carrier"},
-	{"manage_customs_docs", "Работа с таможенными документами", "Placeholder для будущего таможенного модуля", "customs"},
-	{"receive_cargo_by_route", "Получение заявок на груз", "Открывает GET /api/cargo/available. Пока без фильтра по направлению — хранить маршруты участника негде (Этап 2)", "cargo"},
-	{"submit_offer", "Подача предложений на грузы", "Открывает POST /api/cargo/:id/offers (Этап 2)", "cargo"},
-	{"submit_fill_report", "Отчёты о заполняемости склада", "Открывает POST /api/warehouse/fill-report (Этап 6)", "warehouse"},
+	{"verify_participants", "Верификация участников", "Проверка документов и решений по заявкам участников", "admin", true},
+	{"manage_tools", "Управление инструментами и наборами", "Настройка инструментов, наборов прав и назначений", "admin", true},
+	{"view_users", "Просмотр участников", "Список, карточки и активность участников платформы", "admin", true},
+	{"create_cargo_request", "Создание заявки на груз", "Создание груза доступно каждому участнику бесплатно", "cargo", false},
+	{"view_cargo_requests", "Просмотр заявок на груз", "Устаревший инструмент, заменён поиском грузов", "cargo", false},
+	{"manage_warehouse_slots", "Мои складские услуги", "Склады, доступные площади, забор груза и направления отправки", "warehouse", true},
+	{"manage_fleet", "Мой транспорт", "Автопарк, направления, рейсы и предложения на перевозку", "carrier", true},
+	{"manage_customs_docs", "Мои таможенные услуги", "Настройка услуг таможенного оформления и участие в конкурсах", "customs", true},
+	{"receive_cargo_by_route", "Поиск грузов по направлениям", "Показывает открытые грузы, подходящие под ваши направления", "cargo", true},
+	{"submit_offer", "Предложения на перевозку", "Позволяет подавать и согласовывать предложения по открытым грузам", "cargo", true},
+	{"submit_fill_report", "Отчёты о заполняемости склада", "Устаревшая функция, заменена настройками складов", "warehouse", false},
 }
 
 func seedTools(ctx context.Context, db *pgxpool.Pool) (map[string]uuid.UUID, error) {
@@ -129,7 +139,7 @@ func seedTools(ctx context.Context, db *pgxpool.Pool) (map[string]uuid.UUID, err
 			Name:        spec.name,
 			Description: spec.description,
 			Category:    spec.category,
-			IsActive:    true,
+			IsActive:    spec.active,
 		}
 		if err := toolRepo.UpsertByKey(ctx, t); err != nil {
 			return nil, fmt.Errorf("tool %s: %w", spec.key, err)
@@ -141,13 +151,13 @@ func seedTools(ctx context.Context, db *pgxpool.Pool) (map[string]uuid.UUID, err
 
 type setSpec struct {
 	name, description string
-	toolKeys           []string
+	toolKeys          []string
 }
 
 var baseSets = []setSpec{
-	{"Базовый клиент", "Стартовый доступ для клиента: создание и просмотр заявок на груз", []string{"create_cargo_request", "view_cargo_requests"}},
-	{"Складской оператор", "Доступ для склада: складские места, заявки на груз, предложения и отчёты о заполняемости", []string{"manage_warehouse_slots", "view_cargo_requests", "receive_cargo_by_route", "submit_offer", "submit_fill_report"}},
-	{"Перевозчик", "Доступ для перевозчика: автопарк, заявки на груз и подача предложений", []string{"manage_fleet", "view_cargo_requests", "receive_cargo_by_route", "submit_offer"}},
+	{"Базовый клиент", "Бесплатная публикация грузов", nil},
+	{"Складской оператор", "Склады, поиск грузов и предложения", []string{"manage_warehouse_slots", "receive_cargo_by_route", "submit_offer"}},
+	{"Перевозчик", "Автопарк, поиск грузов и предложения", []string{"manage_fleet", "receive_cargo_by_route", "submit_offer"}},
 }
 
 func seedPermissionSets(ctx context.Context, db *pgxpool.Pool, toolIDs map[string]uuid.UUID) error {
@@ -212,7 +222,7 @@ type participantSpec struct {
 var baseParticipants = []participantSpec{
 	{"client.pending@example.com", "ООО Клиент Ожидающий", models.ParticipantClient, models.UserStatusPending, "", nil, nil},
 	{"client.active@example.com", "ООО Клиент Активный", models.ParticipantClient, models.UserStatusActive, "", []string{"create_cargo_request", "view_cargo_requests"}, nil},
-	{"warehouse.active@example.com", "Склад Восток", models.ParticipantWarehouse, models.UserStatusActive, "", []string{"manage_warehouse_slots", "receive_cargo_by_route", "submit_offer", "submit_fill_report"}, []routeSpec{{pointAlmaty, pointUrumqi}, {pointUrumqi, pointAlmaty}}},
+	{"warehouse.active@example.com", "Склад Восток", models.ParticipantWarehouse, models.UserStatusActive, "", []string{"manage_warehouse_slots", "receive_cargo_by_route", "submit_offer"}, []routeSpec{{pointAlmaty, pointUrumqi}, {pointUrumqi, pointAlmaty}}},
 	{"carrier.blocked@example.com", "ИП Перевозчик Заблокированный", models.ParticipantCarrier, models.UserStatusBlocked, "", nil, []routeSpec{{pointKhorgos, pointAlmaty}}},
 	{"broker.rejected@example.com", "Брокер Отклонённый", models.ParticipantBroker, models.UserStatusRejected, "Документы не соответствуют требованиям", nil, nil},
 }
