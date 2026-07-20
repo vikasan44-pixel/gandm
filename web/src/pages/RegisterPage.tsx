@@ -5,7 +5,8 @@ import { ApiError } from "../api/client";
 import { getToolCatalog, uploadRegistrationDocument } from "../api/participant";
 import { t } from "../i18n";
 import { useSeo } from "../utils/seo";
-import type { Tool } from "../api/types";
+import type { LegalForm, Tool } from "../api/types";
+import { groupToolsBySection, localizedToolText } from "../utils/toolSections";
 
 const DOCUMENT_TYPES = [
   "id_card",
@@ -30,6 +31,7 @@ export function RegisterPage() {
   useSeo({ title: t("register.title"), noindex: true });
 
   const [companyName, setCompanyName] = useState("");
+  const [legalForm, setLegalForm] = useState<LegalForm>("individual");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
@@ -57,11 +59,14 @@ export function RegisterPage() {
     return <Navigate to={cabinetPathFor(user)} replace />;
   }
 
-  const freeTools = catalog.filter((tl) => tl.price_kzt === 0);
-  const paidTools = catalog.filter((tl) => tl.price_kzt > 0);
+  const toolSections = groupToolsBySection(catalog);
   const monthlyTotal = catalog
     .filter((tl) => selectedTools.has(tl.id) && tl.price_kzt > 0)
     .reduce((sum, tl) => sum + tl.price_kzt, 0);
+  const requiredDocumentTypes = legalForm === "individual"
+    ? ["id_card"]
+    : ["founding_docs", "business_license"];
+  const canFinish = requiredDocumentTypes.every((type) => uploaded.some((doc) => doc.type === type));
 
   function toggleTool(id: string) {
     setSelectedTools((prev) => {
@@ -89,6 +94,7 @@ export function RegisterPage() {
         email,
         phone,
         company_name: companyName,
+        legal_form: legalForm,
         password,
         tool_ids: [...selectedTools],
       });
@@ -125,6 +131,7 @@ export function RegisterPage() {
         <div className="login-card login-card--wide">
           <h1 className="login-card__title">{t("register.docsTitle")}</h1>
           <p className="register-hint">{t("register.docsHint")}</p>
+          <p className="register-hint"><strong>{t(`register.docsRequired.${legalForm}`)}</strong></p>
 
           <form onSubmit={handleUpload} className="register-doc-form">
             <label className="field">
@@ -167,6 +174,7 @@ export function RegisterPage() {
           <button
             className="btn btn--primary"
             type="button"
+            disabled={!canFinish}
             onClick={() => navigate(cabinetPathFor(user), { replace: true })}
           >
             {t("register.finish")}
@@ -182,7 +190,14 @@ export function RegisterPage() {
       <form className="login-card login-card--wide" onSubmit={handleSubmit}>
         <h1 className="login-card__title">{t("register.title")}</h1>
         <label className="field">
-          <span className="field__label">{t("register.companyName")}</span>
+          <span className="field__label">{t("register.legalForm")}</span>
+          <select value={legalForm} onChange={(e) => setLegalForm(e.target.value as LegalForm)}>
+            <option value="individual">{t("legalForm.individual")}</option>
+            <option value="legal_entity">{t("legalForm.legal_entity")}</option>
+          </select>
+        </label>
+        <label className="field">
+          <span className="field__label">{t(legalForm === "individual" ? "register.personName" : "register.companyName")}</span>
           <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} autoFocus required />
         </label>
         <label className="field">
@@ -217,22 +232,17 @@ export function RegisterPage() {
           <span className="field__label">{t("register.toolsTitle")}</span>
           <p className="register-hint">{t("register.toolsHint")}</p>
 
-          {freeTools.length > 0 && (
-            <>
-              <div className="tools-pick__group">{t("register.toolsFree")}</div>
-              {freeTools.map((tl) => (
-                <ToolCheck key={tl.id} tool={tl} checked={selectedTools.has(tl.id)} onToggle={toggleTool} />
-              ))}
-            </>
-          )}
-          {paidTools.length > 0 && (
-            <>
-              <div className="tools-pick__group">{t("register.toolsPaid")}</div>
-              {paidTools.map((tl) => (
-                <ToolCheck key={tl.id} tool={tl} checked={selectedTools.has(tl.id)} onToggle={toggleTool} />
-              ))}
-            </>
-          )}
+          <div className="tools-pick--sections">
+            {toolSections.map((section) => (
+              <section className="tools-pick__section" key={section.key}>
+                <h2 className="tools-pick__section-title">{t(`toolSections.${section.key}`)}</h2>
+                <p className="tools-pick__section-hint">{t(`toolSectionHints.${section.key}`)}</p>
+                {section.tools.map((tl) => (
+                  <ToolCheck key={tl.id} tool={tl} checked={selectedTools.has(tl.id)} onToggle={toggleTool} />
+                ))}
+              </section>
+            ))}
+          </div>
 
           <div className="tools-pick__total">
             {t("register.monthlyTotal")}:{" "}
@@ -270,14 +280,14 @@ function ToolCheck({
       <input type="checkbox" checked={checked} onChange={() => onToggle(tool.id)} />
       <span className="tool-pick__body">
         <span className="tool-pick__name">
-          {tool.name}
+          {localizedToolText(tool, "name")}
           <span className={tool.price_kzt > 0 ? "pill pill--yellow" : "pill pill--green"}>
             {tool.price_kzt > 0
               ? `${tool.price_kzt.toLocaleString("ru-RU")} ₸/${t("register.perMonth")}`
               : t("register.free")}
           </span>
         </span>
-        <span className="tool-pick__desc">{tool.description}</span>
+        <span className="tool-pick__desc">{localizedToolText(tool, "description")}</span>
       </span>
     </label>
   );

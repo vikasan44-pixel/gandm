@@ -18,19 +18,21 @@ import {
 import { LoadingState } from "../components/common/LoadingState";
 import { ErrorState } from "../components/common/ErrorState";
 import { EmptyState } from "../components/common/EmptyState";
+import { DetailModal } from "../components/common/DetailModal";
+import { useConfirm } from "../components/common/ConfirmDialog";
 import { UserStatusPill } from "../components/common/StatusPill";
 import { GeoPointField } from "../components/geo/GeoPointField";
 import { ApiError } from "../api/client";
 import { formatDate, formatDateTime } from "../utils/date";
 import { t } from "../i18n";
 import type { GeoPoint, ParticipantType, UserStatus } from "../api/types";
+import { cityLabel } from "../utils/locationLabel";
+import { toolCategoryLabel } from "../utils/toolSections";
 
 const participantTypes: ParticipantType[] = [
   "client",
   "warehouse",
   "carrier",
-  "driver",
-  "broker",
   "customs_rep",
 ];
 const userStatuses: UserStatus[] = ["pending", "active", "blocked", "rejected"];
@@ -50,7 +52,7 @@ export function UsersPage() {
   const users = useAsync(() => getUsers({ type, status, search }), [type, status, search]);
 
   return (
-    <div className="page page--split page--split-wide">
+    <div className="page">
       <div className="page__list">
         <h1 className="page__title">{t("users.title")}</h1>
         <div className="filters">
@@ -116,13 +118,11 @@ export function UsersPage() {
           </div>
         )}
       </div>
-      <div className="page__detail">
-        {selectedId ? (
+      {selectedId && (
+        <DetailModal onClose={() => setSelectedId(null)} wide>
           <UserDetailPanel userId={selectedId} onChanged={() => users.reload()} />
-        ) : (
-          <EmptyState message={t("users.selectHint")} />
-        )}
-      </div>
+        </DetailModal>
+      )}
     </div>
   );
 }
@@ -134,6 +134,7 @@ function UserDetailPanel({
   userId: string;
   onChanged: () => void;
 }) {
+  const confirm = useConfirm();
   const detail = useAsync(() => getUserDetail(userId), [userId]);
   const allTools = useAsync(getTools, []);
   const allSets = useAsync(getPermissionSets, []);
@@ -210,6 +211,7 @@ function UserDetailPanel({
   }
 
   async function handleDeleteRoute(routeId: string) {
+    if (!await confirm({ message: t("routes.deleteConfirm"), confirmLabel: t("routes.delete") })) return;
     setActionError(null);
     setIsSaving(true);
     try {
@@ -379,7 +381,7 @@ function UserDetailPanel({
             <li key={route.id} className="tool-row">
               <div>
                 <div className="tool-row__name">
-                  {route.origin.label} → {route.destination.label}
+                  {cityLabel(route.origin)} → {cityLabel(route.destination)}
                 </div>
                 <div className="tool-row__key">
                   {route.origin.lat.toFixed(4)}, {route.origin.lng.toFixed(4)} →{" "}
@@ -458,7 +460,7 @@ function UserDetailPanel({
                 onChange={() => toggleTool(tool.id)}
               />
               <span>{tool.name}</span>
-              <span className="tool-checklist__category">{tool.category}</span>
+              <span className="tool-checklist__category">{toolCategoryLabel(tool.category)}</span>
             </label>
           ))}
           <button className="btn btn--primary btn--sm" onClick={handleSaveTools} disabled={isSaving}>

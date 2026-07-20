@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import markerIconUrl from "leaflet/dist/images/marker-icon.png";
@@ -7,6 +7,7 @@ import markerShadowUrl from "leaflet/dist/images/marker-shadow.png";
 import type { GeoPoint } from "../../api/types";
 import { gcj02ToWgs84, wgs84ToGcj02 } from "../../utils/gcj02";
 import { getLocale, t } from "../../i18n";
+import { cityLabel } from "../../utils/locationLabel";
 
 // Vite doesn't resolve Leaflet's default icon paths — point them at the
 // bundled assets explicitly, otherwise markers render as broken images.
@@ -90,7 +91,9 @@ interface GeoPointFieldProps {
 // where CARTO is blocked (China), converting GCJ-02 ↔ WGS-84 only while that
 // layer is active. Clicking/dragging captures coordinates directly.
 export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
-  const [query, setQuery] = useState("");
+	const inputId = useId();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [query, setQuery] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -108,9 +111,11 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
 
   // Latest onChange/value without re-initializing the map on every render.
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
   const valueRef = useRef(value);
-  valueRef.current = value;
+  useEffect(() => {
+    onChangeRef.current = onChange;
+    valueRef.current = value;
+  }, [onChange, value]);
 
   function emitPoint(
     latWgs: number,
@@ -152,6 +157,7 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
   }
 
   useEffect(() => {
+    if (!isExpanded) return;
     if (!mapContainerRef.current) return;
 
     const map = L.map(mapContainerRef.current).setView(DEFAULT_CENTER, 5);
@@ -213,7 +219,9 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
     map.on("click", (e: L.LeafletMouseEvent) => {
       setMarker(e.latlng.lat, e.latlng.lng);
       const w = toWgs(e.latlng.lat, e.latlng.lng);
+      setQuery(null);
       emitWithMultilang(w.lat, w.lng, "");
+      setIsExpanded(false);
     });
 
     const existing = valueRef.current;
@@ -233,10 +241,10 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
       markerApiRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isExpanded]);
 
   useEffect(() => {
-    const q = query.trim();
+    const q = (query ?? "").trim();
     if (q.length < 3) {
       setResults([]);
       return;
@@ -277,7 +285,7 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
 
   function handleResultClick(result: SearchResult) {
     setResults([]);
-    setQuery("");
+    setQuery(null);
     const map = leafletMapRef.current;
     const api = markerApiRef.current;
     if (map && api) {
@@ -286,17 +294,19 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
       api.setMarker(d.lat, d.lng);
     }
     emitWithMultilang(result.lat, result.lng, result.country, result.label);
+    setIsExpanded(false);
   }
 
   return (
     <div className="geo-field">
       <div className="geo-field__header">
-        <span className="field__label">{title}</span>
+        <label className="field__label" htmlFor={inputId}>{title}</label>
       </div>
 
       <input
+        id={inputId}
         placeholder={t("geo.searchPlaceholder")}
-        value={query}
+        value={query ?? (value ? cityLabel(value) : "")}
         onChange={(e) => setQuery(e.target.value)}
       />
       {isSearching && <div className="geo-field__hint">{t("common.loading")}</div>}
@@ -313,16 +323,8 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
         </ul>
       )}
 
-      <div ref={mapContainerRef} className="geo-map" />
-
       {value ? (
         <div className="geo-field__chosen">
-          <input
-            className="geo-field__label-input"
-            value={value.label}
-            placeholder={t("geo.labelPlaceholder")}
-            onChange={(e) => onChange({ ...value, label: e.target.value })}
-          />
           <span className="geo-field__coords">
             {value.lat.toFixed(5)}, {value.lng.toFixed(5)} ·{" "}
             {value.country ? value.country.toUpperCase() : "??"} · WGS-84
@@ -330,6 +332,28 @@ export function GeoPointField({ title, value, onChange }: GeoPointFieldProps) {
         </div>
       ) : (
         <div className="geo-field__hint">{t("geo.pickHint")}</div>
+      )}
+
+      <button
+        className={`geo-field__map-toggle${isExpanded ? " geo-field__map-toggle--open" : ""}`}
+        type="button"
+        aria-expanded={isExpanded}
+        onClick={() => setIsExpanded((expanded) => !expanded)}
+      >
+        <span className="geo-field__map-toggle-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M12 21s7-6.1 7-12a7 7 0 1 0-14 0c0 5.9 7 12 7 12Z" />
+            <circle cx="12" cy="9" r="2.5" />
+          </svg>
+        </span>
+        <span>{isExpanded ? t("geo.hideMap") : t("geo.showMap")}</span>
+        <span className="geo-field__map-toggle-chevron" aria-hidden="true">⌄</span>
+      </button>
+
+      {isExpanded && (
+        <div className="geo-field__map-panel">
+          <div ref={mapContainerRef} className="geo-map" />
+        </div>
       )}
     </div>
   );

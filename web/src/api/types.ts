@@ -7,6 +7,7 @@ export type ParticipantType =
   | "customs_rep";
 
 export type UserStatus = "pending" | "active" | "blocked" | "rejected";
+export type LegalForm = "individual" | "legal_entity";
 
 export type VerificationStatus = "pending" | "approved" | "rejected";
 
@@ -24,6 +25,7 @@ export interface User {
   email: string;
   phone: string;
   company_name: string;
+  legal_form: LegalForm;
   participant_type: ParticipantType;
   status: UserStatus;
   has_subscription: boolean;
@@ -82,9 +84,10 @@ export interface Admin {
   created_at: string;
 }
 
+// Only the short-lived access token is returned in the body now; the refresh
+// token lives in an httpOnly cookie the browser manages and JS can't read.
 export interface TokenPair {
   access_token: string;
-  refresh_token: string;
 }
 
 export interface AdminLoginResponse {
@@ -144,6 +147,22 @@ export interface MeResponse {
 }
 
 export type CargoRequestStatus = "open" | "matched" | "closed";
+export type CargoCategory =
+  | "chemicals"
+  | "equipment"
+  | "building_materials"
+  | "home_appliances"
+  | "furniture"
+  | "food"
+  | "textiles"
+  | "auto_parts"
+  | "metals"
+  | "timber"
+  | "medical_goods"
+  | "agricultural_goods"
+  | "plastics"
+  | "dangerous_goods"
+  | "other";
 
 export type CoordSource = "amap" | "osm";
 
@@ -162,6 +181,16 @@ export interface GeoPoint {
   labels?: Record<string, string>;
 }
 
+export type CargoPackaging = "packaged" | "bulk";
+
+export interface CargoRequestItem {
+  id?: string;
+  position?: number;
+  length_m: number;
+  width_m: number;
+  height_m: number;
+}
+
 export interface CargoRequest {
   id: string;
   client_id: string;
@@ -169,12 +198,19 @@ export interface CargoRequest {
   destination: GeoPoint;
   volume_m3: number;
   weight_kg: number;
+  category: CargoCategory;
   description: string;
   status: CargoRequestStatus;
   created_at: string;
+  // Логистика: упаковка/россыпью, места+габариты, штабелируемость, АДР.
+  packaging: CargoPackaging;
+  places_count: number;
+  stackable: boolean;
+  adr_required: boolean;
+  items: CargoRequestItem[];
 }
 
-export type OfferStatus = "submitted" | "selected" | "rejected";
+export type OfferStatus = "submitted" | "selected" | "rejected" | "withdrawn";
 
 // Deliberately identity-free: this is everything the client is allowed to
 // see about an offer. offer_id is the offer's own uuid (needed for select)
@@ -193,6 +229,9 @@ export interface AnonymizedOffer {
   // для отправки и сколько уже набрано — без раскрытия, чей это склад.
   dispatch_threshold_m3?: number | null;
   dispatch_accrued_m3?: number | null;
+  dispatch_remaining_m3?: number | null;
+  dispatch_date?: string | null;
+  dispatch_status?: DispatchPlanStatus | null;
   price: number;
   currency: string;
   status: OfferStatus;
@@ -203,9 +242,36 @@ export interface VehicleDestination {
   point: GeoPoint;
 }
 
+export type VehicleTripStatus = "planned" | "loading" | "departed" | "completed";
+export type VehicleVerificationStatus = "not_submitted" | "pending" | "verified" | "rejected";
+export type VehicleDocumentType =
+  | "registration_certificate"
+  | "identity_document"
+  | "insurance"
+  | "photo_front"
+  | "photo_back"
+  | "photo_left"
+  | "photo_right";
+
+export interface VehicleTrip {
+  id: string;
+  vehicle_id: string;
+  origin: GeoPoint;
+  destination: GeoPoint;
+  waypoints: GeoPoint[];
+  can_pickup_en_route: boolean;
+  departure_date: string;
+  loaded_weight_kg: number;
+  loaded_volume_m3: number;
+  status: VehicleTripStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Vehicle {
   id: string;
   user_id: string;
+  name: string;
   axles: number;
   capacity_kg: number;
   capacity_m3: number;
@@ -213,26 +279,75 @@ export interface Vehicle {
   width_m: number;
   height_m: number;
   body_type: string;
+  registration_country: string;
+  plate_number: string;
+  vin: string;
+  verification_status: VehicleVerificationStatus;
+  verification_reject_reason?: string | null;
+  uploaded_document_types: VehicleDocumentType[];
+  trust_percent: number;
+  documents_verified: boolean;
+  has_completed_trips: boolean;
+  masked_plate: string;
   // Местонахождение координатами (по карте), опционально — «откуда».
   location?: GeoPoint | null;
   // Ноль или несколько назначений (координатами) — «куда».
   destinations: VehicleDestination[];
+  // Загрузка относится к конкретному датированному рейсу.
+  trips: VehicleTrip[];
   created_at: string;
 }
 
+export interface VehicleDocumentView {
+  id: string;
+  vehicle_id: string;
+  type: VehicleDocumentType;
+  original_name: string;
+  content_type: string;
+  uploaded_at: string;
+  view_url: string;
+}
+
+export interface VehicleVerificationQueueItem {
+  vehicle_id: string;
+  user_id: string;
+  company_name: string;
+  email: string;
+  plate_number: string;
+  vin: string;
+  status: VehicleVerificationStatus;
+  created_at: string;
+}
+
+export interface VehicleVerificationDetail {
+  vehicle: Vehicle;
+  user: User;
+  documents: VehicleDocumentView[];
+}
+
+export type DispatchPlanStatus = "collecting" | "ready" | "paused" | "dispatched";
+
 export interface DispatchThreshold {
   route_id: string;
+  warehouse_id?: string | null;
   threshold_m3: number;
   accrued_m3: number;
+  platform_accrued_m3: number;
+  manual_accrued_m3: number;
+  remaining_m3: number;
+  estimated_dispatch_date?: string | null;
+  status: DispatchPlanStatus;
   updated_at: string;
 }
 
 export interface RouteWithThreshold {
+  warehouse_id: string;
   route: ParticipantRoute;
+  active_cargo_m3: number;
   threshold?: DispatchThreshold | null;
 }
 
-export type CustomsOfferStatus = "submitted" | "selected" | "rejected";
+export type CustomsOfferStatus = "submitted" | "selected" | "rejected" | "withdrawn";
 
 export interface CustomsOffer {
   id: string;
@@ -253,6 +368,7 @@ export interface CustomsCompetition {
   total_volume_m3: number;
   total_weight_kg: number;
   cargo_names: string[];
+  cargo_items: Array<{ category: CargoCategory; description: string }>;
   created_at: string;
   my_offer?: CustomsOffer | null;
 }
@@ -275,7 +391,7 @@ export interface CustomsSelectResult {
 }
 
 export type DriverCompetitionStatus = "open" | "closed";
-export type DriverBidStatus = "submitted" | "selected" | "rejected";
+export type DriverBidStatus = "submitted" | "selected" | "rejected" | "withdrawn";
 
 export interface DriverCompetition {
   id: string;
@@ -483,6 +599,44 @@ export interface ParticipantRoute {
   created_at: string;
 }
 
+export type WarehouseStatus = "draft" | "published" | "paused";
+
+export interface Warehouse {
+  id: string;
+  user_id: string;
+  name: string;
+  address: GeoPoint;
+  contact_name: string;
+  contact_phone: string;
+  description: string;
+  work_hours: string;
+  covered_area_m2: number;
+  open_area_m2: number;
+  available_covered_area_m2: number;
+  available_open_area_m2: number;
+  max_weight_kg: number;
+  max_volume_m3: number;
+  services: string[];
+  consolidation_enabled: boolean;
+  consolidation_min_volume_m3: number;
+  consolidation_frequency: string;
+  pickup_enabled: boolean;
+  pickup_cities: GeoPoint[];
+  pickup_radius_km: number;
+  own_transport: boolean;
+  pickup_max_weight_kg: number;
+  pickup_max_volume_m3: number;
+  pickup_price_mode: string;
+  dispatch_routes: Array<{
+    id?: string;
+    origin: GeoPoint;
+    destination: GeoPoint;
+  }>;
+  status: WarehouseStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface NotificationItem {
   id: string;
   user_id: string;
@@ -508,4 +662,111 @@ export interface AuditLogEntry {
   target_label?: string | null;
   details?: unknown;
   created_at: string;
+}
+
+// --- Прямые предложения перевозчику (торг из поиска транспорта) ---
+
+export interface TransportProposalItem {
+  id?: string;
+  position?: number;
+  length_m: number;
+  width_m: number;
+  height_m: number;
+}
+
+export type TransportProposalStatus =
+  | "sent"
+  | "carrier_quoted"
+  | "client_countered"
+  | "carrier_final"
+  | "agreed"
+  | "rejected";
+
+export interface TransportProposal {
+  id: string;
+  client_id: string;
+  vehicle_id: string;
+  carrier_id: string;
+  cargo_request_id?: string;
+  origin: GeoPoint;
+  destination: GeoPoint;
+  cargo_name: string;
+  volume_m3: number;
+  weight_kg: number;
+  places_count: number;
+  pickup_date: string;
+  status: TransportProposalStatus;
+  current_price?: number;
+  last_price_by?: "carrier" | "client";
+  currency: string;
+  chat_id?: string;
+  created_at: string;
+  updated_at: string;
+  items: TransportProposalItem[];
+}
+
+// --- Склады как ставщики цены на груз (Фаза 2) ---
+
+export interface WarehouseContact {
+  warehouse_name: string;
+  contact_name: string;
+  contact_phone: string;
+  email: string;
+}
+
+export interface WarehouseOffer {
+  id: string;
+  cargo_request_id: string;
+  warehouse_id: string;
+  warehouse_owner_id: string;
+  price: number;
+  currency: string;
+  conditions: string;
+  status: "submitted" | "selected" | "rejected";
+  chat_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WarehouseOfferView extends WarehouseOffer {
+  warehouse_name: string;
+  warehouse_address: GeoPoint;
+  covered_area_m2: number;
+  max_weight_kg: number;
+  max_volume_m3: number;
+  // Контакт приходит только после выбора этого предложения.
+  contact?: WarehouseContact;
+}
+
+export interface WarehouseSelectResult {
+  contact: WarehouseContact;
+  chat_id: string;
+}
+
+// Склад в результатах поиска — БЕЗ контактов (контакты по подписке).
+export interface PublicWarehouseCard {
+  id: string;
+  name: string;
+  address: GeoPoint;
+  description: string;
+  work_hours: string;
+  covered_area_m2: number;
+  open_area_m2: number;
+  available_covered_area_m2: number;
+  available_open_area_m2: number;
+  max_weight_kg: number;
+  max_volume_m3: number;
+  services: string[];
+  consolidation_enabled: boolean;
+  pickup_enabled: boolean;
+  pickup_radius_km: number;
+  own_transport: boolean;
+  dispatch_routes: { id: string; origin: GeoPoint; destination: GeoPoint }[];
+}
+
+export interface TransportProposalView extends TransportProposal {
+  viewer_role: "client" | "carrier";
+  // Контакты контрагента — приходят только после «договорились».
+  counterpart?: { company_name: string; email: string; phone: string };
+  counterpart_id?: string;
 }

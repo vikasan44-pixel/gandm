@@ -68,6 +68,7 @@ const offerStatusKind: Record<OfferStatus, Kind> = {
   submitted: "yellow",
   selected: "green",
   rejected: "red",
+  withdrawn: "neutral",
 };
 
 export function OfferStatusPill({ status }: { status: OfferStatus }) {

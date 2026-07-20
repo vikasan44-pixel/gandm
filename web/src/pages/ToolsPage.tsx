@@ -14,6 +14,7 @@ import { EmptyState } from "../components/common/EmptyState";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import type { PermissionSet, Tool } from "../api/types";
+import { toolCategoryLabel } from "../utils/toolSections";
 
 export function ToolsPage() {
   const tools = useAsync(getTools, []);
@@ -140,7 +141,7 @@ function ToolsSection({ tools }: { tools: AsyncState<Tool[]> }) {
 
       {grouped.map(([category, list]) => (
         <div key={category} className="tool-group">
-          <h3 className="tool-group__title">{category}</h3>
+          <h3 className="tool-group__title">{toolCategoryLabel(category)}</h3>
           <ul className="tool-group__list">
             {list.map((tool) => (
               <li key={tool.id} className="tool-row">

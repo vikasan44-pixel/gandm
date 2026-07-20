@@ -10,6 +10,9 @@ import {
 import { ApiError } from "../../api/client";
 import { BODY_TYPE_KEYS, bodyTypeLabel } from "../../utils/bodyType";
 import { pickLabel } from "../../utils/geoLabel";
+import { MultilingualCargoCategory, MultilingualRoute } from "../common/MultilingualLabels";
+import { SendProposalModal } from "../proposal/SendProposalModal";
+import { Pagination, SEARCH_PAGE_SIZE } from "../common/Pagination";
 import { t } from "../../i18n";
 import type { GeoPoint } from "../../api/types";
 
@@ -18,8 +21,16 @@ type Tab = "cargo" | "transport";
 // Гостевой поиск на лендинге. Направление задаётся точками на карте (координаты
 // из геокодера) — поиск по радиусу, без текстового сопоставления городов.
 // Гость видит анонимные карточки; открыть объявление можно только после входа.
-export function LandingSearch() {
-  const [tab, setTab] = useState<Tab>("cargo");
+export function LandingSearch({
+  initialTab = "cargo",
+  showTabs = true,
+  isAuthenticated = false,
+}: {
+  initialTab?: Tab;
+  showTabs?: boolean;
+  isAuthenticated?: boolean;
+} = {}) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [from, setFrom] = useState<GeoPoint | null>(null);
   const [to, setTo] = useState<GeoPoint | null>(null);
 
@@ -35,6 +46,7 @@ export function LandingSearch() {
   const [transport, setTransport] = useState<PublicVehicleCard[] | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   function switchTab(next: Tab) {
     if (next === tab) return;
@@ -42,11 +54,13 @@ export function LandingSearch() {
     setCargo(null);
     setTransport(null);
     setError(null);
+    setPage(1);
   }
 
   async function handleSearch() {
     setError(null);
     setIsSearching(true);
+    setPage(1);
     try {
       if (tab === "cargo") {
         setCargo(await searchPublicCargo(from, to));
@@ -62,7 +76,8 @@ export function LandingSearch() {
               min_axles: Number(minAxles) || undefined,
             },
             from,
-            to
+            to,
+            isAuthenticated
           )
         );
       }
@@ -74,12 +89,15 @@ export function LandingSearch() {
   }
 
   const results = tab === "cargo" ? cargo : transport;
+  const pageStart = (page - 1) * SEARCH_PAGE_SIZE;
+  const pagedCargo = (cargo ?? []).slice(pageStart, pageStart + SEARCH_PAGE_SIZE);
+  const pagedTransport = (transport ?? []).slice(pageStart, pageStart + SEARCH_PAGE_SIZE);
 
   return (
     <section className="landing__search panel">
       <h2 className="landing__card-title">{t("landing.search.heading")}</h2>
 
-      <div className="landing-search__tabs">
+      {showTabs && <div className="landing-search__tabs">
         <button
           type="button"
           className={"landing-search__tab" + (tab === "cargo" ? " landing-search__tab--active" : "")}
@@ -94,17 +112,17 @@ export function LandingSearch() {
         >
           {t("landing.search.tabTransport")}
         </button>
-      </div>
+      </div>}
 
       <p className="panel__hint">{t("landing.search.hint")}</p>
 
-      <div className="field-row">
+      <div className="landing-search__route-fields">
         <GeoPointField title={t("landing.search.from")} value={from} onChange={setFrom} />
         <GeoPointField title={t("landing.search.to")} value={to} onChange={setTo} />
       </div>
 
       {tab === "transport" && (
-        <div className="field-row">
+        <div className="field-row landing-search__transport-filters">
           <label className="field">
             <span className="field__label">{t("landing.search.bodyType")}</span>
             <select value={bodyType} onChange={(e) => setBodyType(e.target.value)}>
@@ -156,11 +174,13 @@ export function LandingSearch() {
 
           <ul className="landing-search__list">
             {tab === "cargo"
-              ? (cargo ?? []).map((c) => <CargoCard key={c.id} card={c} />)
-              : (transport ?? []).map((v) => <TransportCard key={v.id} card={v} />)}
+              ? pagedCargo.map((c) => <CargoCard key={c.id} card={c} />)
+              : pagedTransport.map((v) => <TransportCard key={`${v.id}-${v.active_trip?.id ?? "vehicle"}`} card={v} isAuthenticated={isAuthenticated} />)}
           </ul>
 
-          {results.length > 0 && (
+          <Pagination page={page} totalItems={results.length} onPageChange={setPage} />
+
+          {results.length > 0 && !isAuthenticated && (
             <div className="landing-search__gate">
               {t("landing.search.loginToView")}{" "}
               <Link to="/login">{t("landing.ctaLogin")}</Link>
@@ -173,11 +193,14 @@ export function LandingSearch() {
 }
 
 function CargoCard({ card }: { card: PublicCargoCard }) {
+  const origin = { lat: 0, lng: 0, label: card.origin_label, labels: card.origin_labels, country: card.origin_country, source: "osm" as const };
+  const destination = { lat: 0, lng: 0, label: card.destination_label, labels: card.destination_labels, country: card.destination_country, source: "osm" as const };
   return (
     <li className="public-card">
       <div className="public-card__route">
-        {card.origin_label} → {card.destination_label}
+        <MultilingualRoute origin={origin} destination={destination} />
       </div>
+      <div className="public-card__meta"><MultilingualCargoCategory category={card.category} /></div>
       <div className="public-card__meta">
         {t("landing.search.volume")}: {card.volume_m3} м³ · {t("landing.search.weight")}: {card.weight_kg} кг
       </div>
@@ -188,9 +211,12 @@ function CargoCard({ card }: { card: PublicCargoCard }) {
   );
 }
 
-function TransportCard({ card }: { card: PublicVehicleCard }) {
+function TransportCard({ card, isAuthenticated }: { card: PublicVehicleCard; isAuthenticated?: boolean }) {
+  const [proposing, setProposing] = useState(false);
+  const [sent, setSent] = useState(false);
+  const vehicleLabel = `${bodyTypeLabel(card.body_type)} · ${card.capacity_kg.toLocaleString()} ${t("fleet.unitKg")}`;
   return (
-    <li className="public-card">
+    <li className="public-card public-card--transport">
       <div className="public-card__route">
         {bodyTypeLabel(card.body_type)} · {card.capacity_kg.toLocaleString()} {t("fleet.unitKg")}
         {card.capacity_m3 > 0 ? ` · ${card.capacity_m3} ${t("fleet.unitM3")}` : ""} · {card.axles}{" "}
@@ -207,9 +233,47 @@ function TransportCard({ card }: { card: PublicVehicleCard }) {
           {t("landing.search.direction")}: {card.destinations.map((d) => pickLabel(d.labels, d.label)).join(", ")}
         </div>
       )}
-      <button className="btn btn--ghost btn--sm" type="button" disabled title={t("landing.search.loginToView")}>
-        {t("landing.search.details")}
-      </button>
+      {card.active_trip && (
+        <div className="public-card__trip-plan">
+          <strong>{t("fleet.activeTripPlan")}</strong>
+          <span>{pickLabel(card.active_trip.origin.labels, card.active_trip.origin.label)} → {pickLabel(card.active_trip.destination.labels, card.active_trip.destination.label)}</span>
+          {card.active_trip.waypoints.length > 0 && <small>{t("fleet.routeCities")}: {card.active_trip.waypoints.map((point) => pickLabel(point.labels, point.label)).join(" → ")}</small>}
+          <small>{t("fleet.freeSpace")} {card.active_trip.free_volume_m3} {t("fleet.unitM3")} · {card.active_trip.free_weight_kg.toLocaleString()} {t("fleet.unitKg")}</small>
+          {card.active_trip.can_pickup_en_route && <span className="pill pill--green">{t("fleet.enRoutePickupBadge")} · {t("fleet.pickupRadius")}</span>}
+        </div>
+      )}
+      <div className="public-card__trust">
+        <strong>{t("fleet.trust")}: {card.trust_percent}%</strong>
+        {card.documents_verified && <span className="pill pill--green">{t("fleet.documentsVerified")}</span>}
+        {card.has_completed_trips && <span className="pill pill--green">{t("fleet.historyConfirmed")}</span>}
+        {card.masked_plate && <span className="pill pill--neutral">{card.masked_plate}</span>}
+      </div>
+      {isAuthenticated ? (
+        sent ? (
+          <div className="public-card__meta" style={{ color: "var(--color-success, #2e7d32)" }}>
+            {t("proposals.sent")}
+          </div>
+        ) : (
+          <button className="btn btn--primary btn--sm public-card__action" type="button" onClick={() => setProposing(true)}>
+            {t("proposals.send")}
+          </button>
+        )
+      ) : (
+        <button className="btn btn--ghost btn--sm public-card__action" type="button" disabled title={t("landing.search.loginToView")}>
+          {t("landing.search.details")}
+        </button>
+      )}
+      {proposing && (
+        <SendProposalModal
+          vehicleId={card.id}
+          vehicleLabel={vehicleLabel}
+          onClose={() => setProposing(false)}
+          onSent={() => {
+            setProposing(false);
+            setSent(true);
+          }}
+        />
+      )}
     </li>
   );
 }

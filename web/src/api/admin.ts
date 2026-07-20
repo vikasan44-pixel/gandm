@@ -16,6 +16,9 @@ import type {
   VerificationDetail,
   VerificationQueueItem,
   VerificationStatus,
+  VehicleVerificationDetail,
+  VehicleVerificationQueueItem,
+  VehicleVerificationStatus,
 } from "./types";
 
 export function login(email: string, password: string) {
@@ -62,6 +65,22 @@ export function approveVerification(id: string) {
 
 export function rejectVerification(id: string, reason: string) {
   return api.post<{ status: string }>(`/admin/verifications/${id}/reject`, { reason });
+}
+
+export function getVehicleVerificationQueue(status: VehicleVerificationStatus = "pending") {
+  return api.get<VehicleVerificationQueueItem[]>(`/admin/vehicle-verifications?status=${encodeURIComponent(status)}`);
+}
+
+export function getVehicleVerificationDetail(id: string) {
+  return api.get<VehicleVerificationDetail>(`/admin/vehicle-verifications/${id}`);
+}
+
+export function approveVehicleVerification(id: string) {
+  return api.post<{ status: string }>(`/admin/vehicle-verifications/${id}/approve`);
+}
+
+export function rejectVehicleVerification(id: string, reason: string) {
+  return api.post<{ status: string }>(`/admin/vehicle-verifications/${id}/reject`, { reason });
 }
 
 export interface UserListParams {

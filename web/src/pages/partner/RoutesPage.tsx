@@ -3,30 +3,21 @@ import { useAsync } from "../../hooks/useAsync";
 import {
   addRoute,
   deleteRoute,
-  deleteDispatchThreshold,
-  getDispatchThresholds,
   getRoutes,
-  setDispatchThreshold,
 } from "../../api/participant";
 import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
 import { GeoPointField } from "../../components/geo/GeoPointField";
+import { MultilingualRoute } from "../../components/common/MultilingualLabels";
+import { useConfirm } from "../../components/common/ConfirmDialog";
 import { ApiError } from "../../api/client";
 import { t } from "../../i18n";
-import type { DispatchThreshold, GeoPoint } from "../../api/types";
+import type { GeoPoint } from "../../api/types";
 
 export function RoutesPage() {
+  const confirm = useConfirm();
   const routes = useAsync(getRoutes, []);
-  // Пороги отправки видят только участники с manage_warehouse_slots — на
-  // 403 tool_required секция просто не показывается.
-  const thresholds = useAsync(getDispatchThresholds, []);
-  const hasSlotsTool = thresholds.data !== null;
-  const thresholdByRoute = new Map(
-    (thresholds.data ?? [])
-      .filter((row) => row.threshold)
-      .map((row) => [row.route.id, row.threshold as DispatchThreshold])
-  );
   const [origin, setOrigin] = useState<GeoPoint | null>(null);
   const [destination, setDestination] = useState<GeoPoint | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +47,7 @@ export function RoutesPage() {
   }
 
   async function handleDelete(routeId: string) {
+    if (!await confirm({ message: t("routes.deleteConfirm"), confirmLabel: t("routes.delete") })) return;
     setError(null);
     try {
       await deleteRoute(routeId);
@@ -97,28 +89,18 @@ export function RoutesPage() {
         {routes.data && routes.data.length === 0 && (
           <EmptyState message={t("routes.empty")} />
         )}
-        {hasSlotsTool && routes.data && routes.data.length > 0 && (
-          <p className="panel__hint">{t("dispatch.hint")}</p>
-        )}
         {routes.data && routes.data.length > 0 && (
           <ul className="tool-group__list">
             {routes.data.map((route) => (
               <li key={route.id} className="tool-row" style={{ alignItems: "flex-start" }}>
                 <div style={{ flex: 1 }}>
                   <div className="tool-row__name">
-                    {route.origin.label} → {route.destination.label}
+                    <MultilingualRoute origin={route.origin} destination={route.destination} />
                   </div>
                   <div className="tool-row__key">
                     {route.origin.lat.toFixed(4)}, {route.origin.lng.toFixed(4)} →{" "}
                     {route.destination.lat.toFixed(4)}, {route.destination.lng.toFixed(4)}
                   </div>
-                  {hasSlotsTool && (
-                    <ThresholdEditor
-                      routeId={route.id}
-                      threshold={thresholdByRoute.get(route.id)}
-                      onChanged={thresholds.reload}
-                    />
-                  )}
                 </div>
                 <button
                   className="btn btn--ghost btn--sm"
@@ -132,98 +114,5 @@ export function RoutesPage() {
         )}
       </section>
     </div>
-  );
-}
-
-// ThresholdEditor — «порог отправки» склада на направлении (ТЗ §5.2):
-// сколько м³ нужно набрать и сколько уже есть. Значения видны клиентам в
-// анонимных предложениях этого склада.
-function ThresholdEditor({
-  routeId,
-  threshold,
-  onChanged,
-}: {
-  routeId: string;
-  threshold?: DispatchThreshold;
-  onChanged: () => void;
-}) {
-  const [thresholdM3, setThresholdM3] = useState(threshold ? String(threshold.threshold_m3) : "");
-  const [accruedM3, setAccruedM3] = useState(threshold ? String(threshold.accrued_m3) : "0");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [isBusy, setIsBusy] = useState(false);
-
-  async function handleSave(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setNotice(null);
-    const th = Number(thresholdM3);
-    const acc = Number(accruedM3);
-    if (!Number.isFinite(th) || th <= 0 || !Number.isFinite(acc) || acc < 0) {
-      setError(t("dispatch.numbersInvalid"));
-      return;
-    }
-    setIsBusy(true);
-    try {
-      await setDispatchThreshold(routeId, th, acc);
-      setNotice(t("dispatch.saved"));
-      onChanged();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
-  async function handleRemove() {
-    setError(null);
-    setNotice(null);
-    setIsBusy(true);
-    try {
-      await deleteDispatchThreshold(routeId);
-      setThresholdM3("");
-      setAccruedM3("0");
-      onChanged();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
-  return (
-    <form className="inline-form" style={{ marginTop: 8 }} onSubmit={handleSave}>
-      <input
-        type="number"
-        min={1}
-        step="any"
-        value={thresholdM3}
-        onChange={(e) => setThresholdM3(e.target.value)}
-        placeholder={t("dispatch.threshold")}
-      />
-      <input
-        type="number"
-        min={0}
-        step="any"
-        value={accruedM3}
-        onChange={(e) => setAccruedM3(e.target.value)}
-        placeholder={t("dispatch.accrued")}
-      />
-      <button className="btn btn--secondary btn--sm" type="submit" disabled={isBusy}>
-        {isBusy ? t("common.loading") : t("dispatch.save")}
-      </button>
-      {threshold && (
-        <button
-          className="btn btn--ghost btn--sm"
-          type="button"
-          disabled={isBusy}
-          onClick={() => void handleRemove()}
-        >
-          {t("dispatch.remove")}
-        </button>
-      )}
-      {notice && <span className="panel__hint">{notice}</span>}
-      {error && <span className="form-error">{error}</span>}
-    </form>
   );
 }

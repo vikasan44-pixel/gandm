@@ -4,6 +4,7 @@ import { LoadingState } from "../components/common/LoadingState";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import type { Tool } from "../api/types";
+import { groupToolsBySection, localizedToolText } from "../utils/toolSections";
 
 // MyToolsPage — участник сам включает/выключает инструменты после
 // регистрации (роли нет). Изменения применяются кнопкой «Сохранить»;
@@ -56,8 +57,7 @@ export function MyToolsPage() {
     }
   }
 
-  const freeTools = catalog.filter((tl) => tl.price_kzt === 0);
-  const paidTools = catalog.filter((tl) => tl.price_kzt > 0);
+  const sections = groupToolsBySection(catalog);
   const monthlyTotal = catalog
     .filter((tl) => selected.has(tl.id) && tl.price_kzt > 0)
     .reduce((sum, tl) => sum + tl.price_kzt, 0);
@@ -72,14 +72,17 @@ export function MyToolsPage() {
 
       {!isLoading && (
         <section className="panel">
-          {freeTools.length > 0 && <div className="tools-pick__group">{t("register.toolsFree")}</div>}
-          {freeTools.map((tl) => (
-            <ToolRow key={tl.id} tool={tl} checked={selected.has(tl.id)} onToggle={toggle} />
-          ))}
-          {paidTools.length > 0 && <div className="tools-pick__group">{t("register.toolsPaid")}</div>}
-          {paidTools.map((tl) => (
-            <ToolRow key={tl.id} tool={tl} checked={selected.has(tl.id)} onToggle={toggle} />
-          ))}
+          <div className="tools-pick tools-pick--sections">
+            {sections.map((section) => (
+              <section className="tools-pick__section" key={section.key}>
+                <h2 className="tools-pick__section-title">{t(`toolSections.${section.key}`)}</h2>
+                <p className="tools-pick__section-hint">{t(`toolSectionHints.${section.key}`)}</p>
+                {section.tools.map((tl) => (
+                  <ToolRow key={tl.id} tool={tl} checked={selected.has(tl.id)} onToggle={toggle} />
+                ))}
+              </section>
+            ))}
+          </div>
 
           <div className="tools-pick__total">
             {t("register.monthlyTotal")}:{" "}
@@ -114,14 +117,14 @@ function ToolRow({
       <input type="checkbox" checked={checked} onChange={() => onToggle(tool.id)} />
       <span className="tool-pick__body">
         <span className="tool-pick__name">
-          {tool.name}
+          {localizedToolText(tool, "name")}
           <span className={tool.price_kzt > 0 ? "pill pill--yellow" : "pill pill--green"}>
             {tool.price_kzt > 0
               ? `${tool.price_kzt.toLocaleString("ru-RU")} ₸/${t("register.perMonth")}`
               : t("register.free")}
           </span>
         </span>
-        <span className="tool-pick__desc">{tool.description}</span>
+        <span className="tool-pick__desc">{localizedToolText(tool, "description")}</span>
       </span>
     </label>
   );

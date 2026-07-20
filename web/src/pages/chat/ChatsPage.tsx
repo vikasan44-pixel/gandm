@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useAsync } from "../../hooks/useAsync";
 import {
   getChatMessages,
@@ -11,9 +11,11 @@ import { useAuth } from "../../auth/AuthContext";
 import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
+import { DetailModal } from "../../components/common/DetailModal";
 import { RatingForm } from "../../components/rating/RatingForm";
 import { ApiError } from "../../api/client";
 import { formatDateTime } from "../../utils/date";
+import { safeExternalUrl } from "../../utils/url";
 import { t } from "../../i18n";
 import type { ChatMessage, ChatView } from "../../api/types";
 
@@ -28,7 +30,7 @@ export function ChatsPage() {
   const [selected, setSelected] = useState<ChatView | null>(null);
 
   return (
-    <div className="page page--split">
+    <div className="page">
       <div className="page__list">
         <h1 className="page__title">{t("chats.title")}</h1>
         {chats.isLoading && <LoadingState />}
@@ -56,15 +58,12 @@ export function ChatsPage() {
           </ul>
         )}
       </div>
-      <div className="page__detail">
-        {selected ? (
-          // key remounts the window per chat: fresh message state and a
-          // fresh poll interval, the old one cleaned up by the effect.
+      {selected && (
+        <DetailModal onClose={() => setSelected(null)} wide>
+          {/* key remounts the window per chat: fresh message state and poll interval */}
           <ChatWindow key={selected.id} chat={selected} />
-        ) : (
-          <EmptyState message={t("chats.selectHint")} />
-        )}
-      </div>
+        </DetailModal>
+      )}
     </div>
   );
 }
@@ -83,7 +82,7 @@ function ChatWindow({ chat }: { chat: ChatView }) {
   const inFlightRef = useRef(false);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
 
-  function appendMessages(items: ChatMessage[]) {
+  const appendMessages = useCallback((items: ChatMessage[]) => {
     if (items.length === 0) return;
     setMessages((prev) => {
       // Dedupe against a poll that raced a just-sent message.
@@ -92,7 +91,7 @@ function ChatWindow({ chat }: { chat: ChatView }) {
       return fresh.length ? [...prev, ...fresh] : prev;
     });
     lastMessageIdRef.current = items[items.length - 1].id;
-  }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,8 +129,7 @@ function ChatWindow({ chat }: { chat: ChatView }) {
       cancelled = true;
       clearInterval(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.id]);
+  }, [appendMessages, chat.id]);
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ block: "end" });
@@ -144,9 +142,14 @@ function ChatWindow({ chat }: { chat: ChatView }) {
       setSendError(t("chats.bodyRequired"));
       return;
     }
+    const normalizedAttachment = safeExternalUrl(attachmentUrl.trim());
+    if (attachmentUrl.trim() && !normalizedAttachment) {
+      setSendError(t("chats.attachmentInvalid"));
+      return;
+    }
     setIsSending(true);
     try {
-      const msg = await sendChatMessage(chat.id, body.trim(), attachmentUrl.trim() || undefined);
+      const msg = await sendChatMessage(chat.id, body.trim(), normalizedAttachment ?? undefined);
       appendMessages([msg]);
       setBody("");
       setAttachmentUrl("");
@@ -167,27 +170,33 @@ function ChatWindow({ chat }: { chat: ChatView }) {
       {loadError && <ErrorState message={loadError} />}
 
       <div className="chat-messages">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={
-              "chat-msg" + (msg.sender_id === user?.id ? " chat-msg--own" : "")
-            }
-          >
-            <div className="chat-msg__body">{msg.body}</div>
-            {msg.attachment_url && (
-              <a
-                className="chat-msg__attachment"
-                href={msg.attachment_url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {t("chats.attachment")}
-              </a>
-            )}
-            <div className="chat-msg__time">{formatDateTime(msg.created_at)}</div>
-          </div>
-        ))}
+        {messages.map((msg) => {
+          // Never trust a stored URL in href: React does not block
+          // javascript:/data: URLs, so an unsafe value would run on click.
+          // Only render a link for a validated http(s) URL.
+          const attachmentHref = safeExternalUrl(msg.attachment_url);
+          return (
+            <div
+              key={msg.id}
+              className={
+                "chat-msg" + (msg.sender_id === user?.id ? " chat-msg--own" : "")
+              }
+            >
+              <div className="chat-msg__body">{msg.body}</div>
+              {attachmentHref && (
+                <a
+                  className="chat-msg__attachment"
+                  href={attachmentHref}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {t("chats.attachment")}
+                </a>
+              )}
+              <div className="chat-msg__time">{formatDateTime(msg.created_at)}</div>
+            </div>
+          );
+        })}
         <div ref={scrollAnchorRef} />
       </div>
 

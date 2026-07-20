@@ -8,21 +8,22 @@ import { EmptyState } from "../../components/common/EmptyState";
 import { formatDateTime } from "../../utils/date";
 import { t } from "../../i18n";
 import type { NotificationItem } from "../../api/types";
+import { cityNameFromLabel, compactDirectionLabel } from "../../utils/locationLabel";
 
 function notificationText(n: NotificationItem): string {
   if (n.type === "cargo_request_available" && n.payload) {
     const origin = n.payload.origin_label ?? "?";
     const destination = n.payload.destination_label ?? "?";
-    return `${t("notifications.newCargo")}: ${origin} → ${destination}`;
+    return `${t("notifications.newCargo")}: ${cityNameFromLabel(origin)} → ${cityNameFromLabel(destination)}`;
   }
-  // Человеческие подписи для остальных типов; неизвестный тип показываем
-  // как есть, чтобы новый бэкенд-тип не потерялся молча.
+  // Человеческие подписи для остальных типов; технический код неизвестного
+  // backend-события наружу не показываем.
   const known = t(`notifTypes.${n.type}`);
   if (known !== `notifTypes.${n.type}`) {
     const direction = n.payload?.direction_label;
-    return direction ? `${known}: ${direction}` : known;
+    return direction ? `${known}: ${compactDirectionLabel(direction)}` : known;
   }
-  return n.type;
+  return t("notifications.generic");
 }
 
 export function NotificationsPage() {

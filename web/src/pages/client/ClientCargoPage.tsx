@@ -5,6 +5,7 @@ import {
   acceptConsolidated,
   addFavorite,
   agreeConsolidation,
+  cancelCargo,
   createCargo,
   declineConsolidation,
   getCargoOffers,
@@ -19,18 +20,34 @@ import {
   selectConsolidatedOffer,
   selectCustomsOffer,
   selectOffer,
+  selectWarehouseOffer,
+  getWarehouseOffersForCargo,
+  getWarehouseOffersForConsolidated,
+  selectWarehouseOfferForConsolidated,
+  getMatchingConsolidations,
+  joinConsolidation,
+  updateCargo,
 } from "../../api/participant";
+import type { WarehouseOfferView } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
+import { DetailModal } from "../../components/common/DetailModal";
+import { useConfirm } from "../../components/common/ConfirmDialog";
+import { MultilingualCargoCategory, MultilingualRoute } from "../../components/common/MultilingualLabels";
 import { CargoStatusPill, OfferStatusPill } from "../../components/common/StatusPill";
+import { Money } from "../../components/common/Money";
 import { GeoPointField } from "../../components/geo/GeoPointField";
 import { RatingForm } from "../../components/rating/RatingForm";
 import { ApiError } from "../../api/client";
 import { formatDateTime } from "../../utils/date";
 import { t } from "../../i18n";
+import { CARGO_CATEGORIES, cargoCategoryLabel } from "../../utils/cargoCategories";
+import { pickLabel } from "../../utils/geoLabel";
+import { compactDirectionLabel } from "../../utils/locationLabel";
 import type {
+  AnonymizedOffer,
   CargoRequest,
   ConsolidatedRequest,
   CustomsSelectResult,
@@ -44,6 +61,7 @@ export function ClientCargoPage() {
   const [selected, setSelected] = useState<CargoRequest | null>(null);
   const [selectedCons, setSelectedCons] = useState<ConsolidatedRequest | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [editingCargo, setEditingCargo] = useState<CargoRequest | null>(null);
 
   function reloadAll() {
     cargo.reload();
@@ -51,26 +69,17 @@ export function ClientCargoPage() {
   }
 
   return (
-    <div className="page page--split">
+    <div className="page">
       <div className="page__list">
         <div className="panel__header">
           <h1 className="page__title">{t("nav.myCargo")}</h1>
           <button
             className="btn btn--primary btn--sm"
-            onClick={() => setIsCreating((v) => !v)}
+            onClick={() => setIsCreating(true)}
           >
-            {isCreating ? t("common.cancel") : t("cargo.newRequest")}
+            {t("cargo.newRequest")}
           </button>
         </div>
-
-        {isCreating && (
-          <NewCargoForm
-            onCreated={() => {
-              setIsCreating(false);
-              cargo.reload();
-            }}
-          />
-        )}
 
         {consolidated.data && consolidated.data.length > 0 && (
           <section>
@@ -90,7 +99,7 @@ export function ClientCargoPage() {
                 >
                   <div className="queue-list__main">
                     <div className="queue-list__name">
-                      {item.origin.label} → {item.destination.label}
+                      <MultilingualRoute origin={item.origin} destination={item.destination} />
                     </div>
                     <div className="queue-list__meta">
                       {t("consolidation.total")}: {item.total_volume_m3} м³ ·{" "}
@@ -125,7 +134,7 @@ export function ClientCargoPage() {
               >
                 <div className="queue-list__main">
                   <div className="queue-list__name">
-                    {item.origin.label} → {item.destination.label}
+                    <MultilingualRoute origin={item.origin} destination={item.destination} />
                   </div>
                   <div className="queue-list__meta">
                     {item.volume_m3} м³ · {item.weight_kg} кг · {formatDateTime(item.created_at)}
@@ -138,27 +147,71 @@ export function ClientCargoPage() {
         )}
       </div>
 
-      <div className="page__detail">
-        {selectedCons ? (
-          <ConsolidatedOffersPanel key={selectedCons.id} consolidated={selectedCons} />
-        ) : selected ? (
-          <OffersPanel key={selected.id} cargo={selected} onSelected={reloadAll} />
-        ) : (
-          <EmptyState message={t("cargo.selectHint")} />
-        )}
-      </div>
+      {isCreating && (
+        <DetailModal onClose={() => setIsCreating(false)} wide>
+          <NewCargoForm onCreated={() => { setIsCreating(false); cargo.reload(); }} />
+        </DetailModal>
+      )}
+
+      {editingCargo && (
+        <DetailModal onClose={() => setEditingCargo(null)} wide>
+          <NewCargoForm
+            initial={editingCargo}
+            onCreated={() => { setEditingCargo(null); reloadAll(); }}
+          />
+        </DetailModal>
+      )}
+
+      {(selectedCons || selected) && (
+        <DetailModal onClose={() => { setSelected(null); setSelectedCons(null); }} wide>
+          {selectedCons ? (
+            <ConsolidatedOffersPanel key={selectedCons.id} consolidated={selectedCons} />
+          ) : selected ? (
+            <>
+              <OffersPanel
+                key={selected.id}
+                cargo={selected}
+                onSelected={reloadAll}
+                onEdit={() => {
+                  setEditingCargo(selected);
+                  setSelected(null);
+                }}
+                onCancelled={() => {
+                  setSelected(null);
+                  reloadAll();
+                }}
+              />
+              <WarehouseOffersPanel key={`wh-${selected.id}`} kind="cargo" id={selected.id} />
+              <LateJoinPanel key={`join-${selected.id}`} cargo={selected} onJoined={reloadAll} />
+            </>
+          ) : null}
+        </DetailModal>
+      )}
     </div>
   );
 }
 
-function NewCargoForm({ onCreated }: { onCreated: () => void }) {
-  const [origin, setOrigin] = useState<GeoPoint | null>(null);
-  const [destination, setDestination] = useState<GeoPoint | null>(null);
-  const [volume, setVolume] = useState("");
-  const [weight, setWeight] = useState("");
-  const [description, setDescription] = useState("");
+function NewCargoForm({ onCreated, initial }: { onCreated: () => void; initial?: CargoRequest }) {
+  const [origin, setOrigin] = useState<GeoPoint | null>(initial?.origin ?? null);
+  const [destination, setDestination] = useState<GeoPoint | null>(initial?.destination ?? null);
+  const [volume, setVolume] = useState(initial ? String(initial.volume_m3) : "");
+  const [weight, setWeight] = useState(initial ? String(initial.weight_kg) : "");
+  const [category, setCategory] = useState<CargoRequest["category"] | "">(initial?.category ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [packaging, setPackaging] = useState<"packaged" | "bulk">(initial?.packaging ?? "packaged");
+  const [stackable, setStackable] = useState<boolean>(initial?.stackable ?? true);
+  const [adrRequired, setAdrRequired] = useState<boolean>(initial?.adr_required ?? false);
+  const [places, setPlaces] = useState<{ length_m: string; width_m: string; height_m: string }[]>(
+    initial?.items?.length
+      ? initial.items.map((it) => ({ length_m: String(it.length_m), width_m: String(it.width_m), height_m: String(it.height_m) }))
+      : [{ length_m: "", width_m: "", height_m: "" }]
+  );
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  function setPlace(i: number, patch: Partial<{ length_m: string; width_m: string; height_m: string }>) {
+    setPlaces((prev) => prev.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -174,16 +227,40 @@ function NewCargoForm({ onCreated }: { onCreated: () => void }) {
       setError(t("cargo.numbersPositive"));
       return;
     }
+    if (!category) {
+      setError(t("cargo.categoryRequired"));
+      return;
+    }
+    if (category === "other" && !description.trim()) {
+      setError(t("cargo.otherNameRequired"));
+      return;
+    }
 
     setIsSubmitting(true);
     try {
-      await createCargo({
+      const items =
+        packaging === "packaged"
+          ? places.map((p) => ({
+              length_m: Number(p.length_m) || 0,
+              width_m: Number(p.width_m) || 0,
+              height_m: Number(p.height_m) || 0,
+            }))
+          : [];
+      const input = {
         origin,
         destination,
         volume_m3: volumeNum,
         weight_kg: weightNum,
+        category,
         description: description.trim(),
-      });
+        packaging,
+        places_count: packaging === "packaged" ? items.length : 0,
+        stackable,
+        adr_required: adrRequired,
+        items,
+      };
+      if (initial) await updateCargo(initial.id, input);
+      else await createCargo(input);
       onCreated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
@@ -194,6 +271,7 @@ function NewCargoForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <form className="inline-form inline-form--stacked" onSubmit={handleSubmit}>
+      <h2 className="detail-panel__title">{initial ? t("cargo.editRequest") : t("cargo.newRequest")}</h2>
       <GeoPointField title={t("geo.originPoint")} value={origin} onChange={setOrigin} />
       <GeoPointField
         title={t("geo.destinationPoint")}
@@ -216,14 +294,64 @@ function NewCargoForm({ onCreated }: { onCreated: () => void }) {
         value={weight}
         onChange={(e) => setWeight(e.target.value)}
       />
+      <label className="field">
+        <span className="field__label">{t("cargo.category")}</span>
+        <select value={category} onChange={(e) => { const v = e.target.value as CargoRequest["category"] | ""; setCategory(v); if (v === "dangerous_goods") setAdrRequired(true); }}>
+          <option value="">— {t("cargo.categoryRequired")} —</option>
+          {CARGO_CATEGORIES.map((item) => (
+            <option key={item} value={item}>{cargoCategoryLabel(item)}</option>
+          ))}
+        </select>
+      </label>
+      {category && <div className="cargo-category-preview"><MultilingualCargoCategory category={category} /></div>}
       <textarea
-        placeholder={t("cargo.description")}
+        placeholder={category === "other" ? t("cargo.otherName") : t("cargo.additionalDescription")}
         value={description}
         onChange={(e) => setDescription(e.target.value)}
       />
+
+      <label className="field">
+        <span className="field__label">{t("cargoLogistics.type")}</span>
+        <select className="field__input" value={packaging} onChange={(e) => setPackaging(e.target.value as "packaged" | "bulk")}>
+          <option value="packaged">{t("cargoLogistics.packaged")}</option>
+          <option value="bulk">{t("cargoLogistics.bulk")}</option>
+        </select>
+      </label>
+
+      {packaging === "packaged" && (
+        <div className="field">
+          <span className="field__label">{t("cargoLogistics.placesCount")}: {places.length} ({t("cargoLogistics.dimsHint")})</span>
+          {places.map((p, i) => (
+            <div className="form-grid form-grid--3" key={i} style={{ marginBottom: 6 }}>
+              <input className="field__input" type="number" placeholder={t("cargoLogistics.length")} value={p.length_m} onChange={(e) => setPlace(i, { length_m: e.target.value })} />
+              <input className="field__input" type="number" placeholder={t("cargoLogistics.width")} value={p.width_m} onChange={(e) => setPlace(i, { width_m: e.target.value })} />
+              <input className="field__input" type="number" placeholder={t("cargoLogistics.height")} value={p.height_m} onChange={(e) => setPlace(i, { height_m: e.target.value })} />
+            </div>
+          ))}
+          <div className="btn-group">
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPlaces((p) => [...p, { length_m: "", width_m: "", height_m: "" }])}>{t("cargoLogistics.addPlace")}</button>
+            {places.length > 1 && (
+              <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPlaces((p) => p.slice(0, -1))}>{t("cargoLogistics.removePlace")}</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input type="checkbox" checked={stackable} onChange={(e) => setStackable(e.target.checked)} />
+        <span>{t("cargoLogistics.stackable")}</span>
+      </label>
+      <span className="field__hint">{t("cargoLogistics.stackableHint")}</span>
+
+      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input type="checkbox" checked={adrRequired} onChange={(e) => setAdrRequired(e.target.checked)} />
+        <span>{t("cargoLogistics.adr")}</span>
+      </label>
+      <span className="field__hint">{t("cargoLogistics.adrHint")}</span>
+
       {error && <div className="form-error">{error}</div>}
       <button className="btn btn--primary btn--sm" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? t("common.loading") : t("cargo.submit")}
+        {isSubmitting ? t("common.loading") : initial ? t("common.save") : t("cargo.submit")}
       </button>
     </form>
   );
@@ -236,18 +364,24 @@ function NewCargoForm({ onCreated }: { onCreated: () => void }) {
 function OffersPanel({
   cargo,
   onSelected,
+  onEdit,
+  onCancelled,
 }: {
   cargo: CargoRequest;
   onSelected: () => void;
+  onEdit: () => void;
+  onCancelled: () => void;
 }) {
+  const confirm = useConfirm();
   const offers = useAsync(() => getCargoOffers(cargo.id), [cargo.id]);
   const [reveal, setReveal] = useState<SelectOfferResult | null>(null);
   const [selectError, setSelectError] = useState<string | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const canSelect = cargo.status === "open" && !reveal;
 
   async function handleSelect(offerId: string) {
-    if (!window.confirm(t("select.confirm"))) return;
+    if (!await confirm({ message: t("select.confirm"), confirmLabel: t("select.button"), danger: false })) return;
     setSelectError(null);
     setIsSelecting(true);
     try {
@@ -262,8 +396,37 @@ function OffersPanel({
     }
   }
 
+  async function handleCancel() {
+    if (!await confirm({ message: t("cargo.cancelConfirm"), confirmLabel: t("cargo.cancelRequest") })) return;
+    setSelectError(null);
+    setIsCancelling(true);
+    try {
+      await cancelCargo(cargo.id);
+      onCancelled();
+    } catch (err) {
+      setSelectError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+    } finally {
+      setIsCancelling(false);
+    }
+  }
+
   return (
     <div className="detail-panel">
+      <div className="detail-panel__heading-row">
+        <div>
+          <h2 className="detail-panel__title"><MultilingualRoute origin={cargo.origin} destination={cargo.destination} /></h2>
+          <p className="panel__hint">{cargo.volume_m3} м³ · {cargo.weight_kg.toLocaleString("ru-RU")} кг</p>
+          <p><MultilingualCargoCategory category={cargo.category} /></p>
+          <p className="panel__hint">{pickLabel(cargo.origin.labels, cargo.origin.label)} → {pickLabel(cargo.destination.labels, cargo.destination.label)}</p>
+          {cargo.description && <p><strong>{t("cargo.originalDescription")}:</strong> {cargo.description}</p>}
+        </div>
+        {cargo.status === "open" && (
+          <div className="competition-response__actions">
+            <button className="btn btn--secondary btn--sm" type="button" onClick={onEdit}>{t("cargo.editRequest")}</button>
+            <button className="btn btn--ghost btn--sm" type="button" disabled={isCancelling} onClick={() => void handleCancel()}>{t("cargo.cancelRequest")}</button>
+          </div>
+        )}
+      </div>
       <ConsolidationBlock cargo={cargo} onChanged={onSelected} />
 
       <h2 className="detail-panel__title">{t("cargo.offersTitle")}</h2>
@@ -298,15 +461,10 @@ function OffersPanel({
                         {offer.latest_fill_actual}%
                       </div>
                     )}
-                    {offer.dispatch_threshold_m3 != null && (
-                      <div className="tool-row__key">
-                        {t("dispatch.offerLabel")} {offer.dispatch_accrued_m3 ?? 0} из{" "}
-                        {offer.dispatch_threshold_m3} м³
-                      </div>
-                    )}
+                    <DispatchOfferProgress offer={offer} />
                   </td>
                   <td>
-                    {offer.price.toLocaleString("ru-RU")} {offer.currency}
+                    <Money amount={offer.price} currency={offer.currency} />
                   </td>
                   <td>
                     <OfferStatusPill status={offer.status} />
@@ -403,6 +561,7 @@ function ConsolidationBlock({
   cargo: CargoRequest;
   onChanged: () => void;
 }) {
+  const confirm = useConfirm();
   const consolidation = useAsync(() => getConsolidation(cargo.id), [cargo.id]);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
@@ -415,7 +574,11 @@ function ConsolidationBlock({
   async function respond(action: "agree" | "decline") {
     const confirmText =
       action === "agree" ? t("consolidation.agreeConfirm") : t("consolidation.declineConfirm");
-    if (!window.confirm(confirmText)) return;
+    if (!await confirm({
+      message: confirmText,
+      confirmLabel: action === "agree" ? t("consolidation.agree") : t("consolidation.decline"),
+      danger: action !== "agree",
+    })) return;
     setError(null);
     setIsBusy(true);
     try {
@@ -446,7 +609,7 @@ function ConsolidationBlock({
       )}
       <p className="consolidation-hint__meta">
         {t("consolidation.otherCargo")}: {view.other_volume_m3} м³ · {view.other_weight_kg} кг ·{" "}
-        {view.direction_label}
+        {compactDirectionLabel(view.direction_label)}
       </p>
       {view.my_side_agreed ? (
         <p className="consolidation-hint__meta">{t("consolidation.waitingOther")}</p>
@@ -478,6 +641,7 @@ function ConsolidationBlock({
 // shared chat → joint carrier selection. The carrier stays anonymous until
 // BOTH clients picked the same offer.
 function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedRequest }) {
+  const confirm = useConfirm();
   const { user } = useAuth();
   const status = useAsync(() => getConsolidatedStatus(consolidated.id), [consolidated.id]);
   const offers = useAsync(() => getConsolidatedOffers(consolidated.id), [consolidated.id]);
@@ -498,8 +662,8 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
     }
   }
 
-  function handleSelect(offerId: string) {
-    if (!window.confirm(t("consolidation.selectConfirm"))) return;
+  async function handleSelect(offerId: string) {
+    if (!await confirm({ message: t("consolidation.selectConfirm"), confirmLabel: t("consolidation.selectCarrier"), danger: false })) return;
     void run(() => selectConsolidatedOffer(consolidated.id, offerId));
   }
 
@@ -510,7 +674,7 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
   return (
     <div className="detail-panel">
       <h2 className="detail-panel__title">
-        {consolidated.origin.label} → {consolidated.destination.label}
+        <MultilingualRoute origin={consolidated.origin} destination={consolidated.destination} />
       </h2>
       <p className="panel__hint">
         {t("consolidation.consolidatedMark")} · {t("consolidation.total")}:{" "}
@@ -673,15 +837,10 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
                         {offer.latest_fill_actual}%
                       </div>
                     )}
-                    {offer.dispatch_threshold_m3 != null && (
-                      <div className="tool-row__key">
-                        {t("dispatch.offerLabel")} {offer.dispatch_accrued_m3 ?? 0} из{" "}
-                        {offer.dispatch_threshold_m3} м³
-                      </div>
-                    )}
+                    <DispatchOfferProgress offer={offer} />
                   </td>
                   <td>
-                    {offer.price.toLocaleString("ru-RU")} {offer.currency}
+                    <Money amount={offer.price} currency={offer.currency} />
                   </td>
                   <td>
                     <OfferStatusPill status={offer.status} />
@@ -705,6 +864,7 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
           </table>
         </div>
       )}
+      <WarehouseOffersPanel kind="consolidated" id={consolidated.id} />
     </div>
   );
 }
@@ -714,6 +874,7 @@ function ConsolidatedOffersPanel({ consolidated }: { consolidated: ConsolidatedR
 // (обсуждение — в общем чате), после выбора контакт раскрыт и представитель
 // подключён к общему чату.
 function CustomsSection({ consolidatedId }: { consolidatedId: string }) {
+  const confirm = useConfirm();
   const offers = useAsync(() => getCustomsOffers(consolidatedId), [consolidatedId]);
   const [result, setResult] = useState<CustomsSelectResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -722,7 +883,7 @@ function CustomsSection({ consolidatedId }: { consolidatedId: string }) {
   const selectedOffer = offers.data?.find((o) => o.status === "selected") ?? null;
 
   async function handleSelect(offerId: string) {
-    if (!window.confirm(t("customs.selectConfirm"))) return;
+    if (!await confirm({ message: t("customs.selectConfirm"), confirmLabel: t("customs.select"), danger: false })) return;
     setError(null);
     setIsBusy(true);
     try {
@@ -781,7 +942,7 @@ function CustomsSection({ consolidatedId }: { consolidatedId: string }) {
                     <td>№{offer.offer_number}</td>
                     <td>{offer.rating !== null ? `★ ${offer.rating}` : "—"}</td>
                     <td>
-                      {offer.price.toLocaleString("ru-RU")} {offer.currency}
+                      <Money amount={offer.price} currency={offer.currency} />
                     </td>
                     <td>{offer.conditions || "—"}</td>
                     <td>
@@ -835,5 +996,133 @@ function CustomsSection({ consolidatedId }: { consolidatedId: string }) {
 
       {error && <div className="form-error">{error}</div>}
     </div>
+  );
+}
+
+function DispatchOfferProgress({ offer }: { offer: AnonymizedOffer }) {
+  if (offer.dispatch_threshold_m3 == null) return null;
+  const target = offer.dispatch_threshold_m3;
+  const accrued = offer.dispatch_accrued_m3 ?? 0;
+  const remaining = offer.dispatch_remaining_m3 ?? Math.max(0, target - accrued);
+  const percent = target > 0 ? Math.min(100, Math.max(0, (accrued / target) * 100)) : 0;
+  return (
+    <div className="dispatch-offer-progress">
+      <strong>{remaining > 0 ? `${t("dispatch.lookingFor")} ${formatDispatchVolume(remaining)} м³` : t("dispatch.readyToSend")}</strong>
+      <span>{t("dispatch.accruedShort")}: {formatDispatchVolume(accrued)} из {formatDispatchVolume(target)} м³</span>
+      <span className="dispatch-offer-progress__bar"><i style={{ width: `${percent}%` }} /></span>
+      {offer.dispatch_date && <span>{t("dispatch.estimatedDate")}: {new Intl.DateTimeFormat("ru-RU").format(new Date(offer.dispatch_date))}</span>}
+    </div>
+  );
+}
+
+function formatDispatchVolume(value: number) {
+  return value.toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+}
+
+// WarehouseOffersPanel — предложения складов на груз клиента. Контакты склада
+// приходят только после выбора (по подписке; сейчас гейт-заглушка отключена).
+function WarehouseOffersPanel({ kind, id }: { kind: "cargo" | "consolidated"; id: string }) {
+  const offers = useAsync(
+    () => (kind === "cargo" ? getWarehouseOffersForCargo(id) : getWarehouseOffersForConsolidated(id)),
+    [kind, id]
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function pick(offerId: string) {
+    setError(null);
+    try {
+      setBusy(true);
+      if (kind === "cargo") await selectWarehouseOffer(id, offerId);
+      else await selectWarehouseOfferForConsolidated(id, offerId);
+      offers.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (offers.isLoading || !offers.data || offers.data.length === 0) return null;
+
+  return (
+    <section className="detail-panel" style={{ marginTop: 16 }}>
+      <h3 className="panel__title">{t("warehouseOffers.title")}</h3>
+      {error && <div className="form-error">{error}</div>}
+      <ul className="landing-search__list">
+        {offers.data.map((o: WarehouseOfferView) => (
+          <li className="public-card" key={o.id}>
+            <div className="public-card__route">{o.warehouse_name}</div>
+            <div className="public-card__meta">
+              {pickLabel(o.warehouse_address.labels, o.warehouse_address.label)} · {t("warehouseOffers.coveredShort")} {o.covered_area_m2} {t("fleet.unitM2")} · {t("warehouseOffers.upToKg")} {o.max_weight_kg.toLocaleString()} {t("fleet.unitKg")}
+            </div>
+            <div className="public-card__meta">
+              <strong><Money amount={o.price} currency={o.currency} /></strong>{o.conditions ? ` · ${o.conditions}` : ""}
+            </div>
+            {o.status === "selected" && o.contact ? (
+              <div className="public-card__trip-plan">
+                <strong>{t("warehouseOffers.chosenContacts")}</strong>
+                <span>{o.contact.warehouse_name} · {o.contact.contact_name}</span>
+                <small>{o.contact.contact_phone} · {o.contact.email}</small>
+                <Link className="btn btn--ghost btn--sm" to="/app/chats">{t("warehouseOffers.openChat")}</Link>
+              </div>
+            ) : o.status === "submitted" ? (
+              <button className="btn btn--primary btn--sm" type="button" disabled={busy} onClick={() => void pick(o.id)}>
+                {t("warehouseOffers.choose")}
+              </button>
+            ) : (
+              <span className="pill pill--neutral">{t("warehouseOffers.rejected")}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// LateJoinPanel — если груз клиента подходит к уже созданному объединению
+// (окно закрылось без него), даём присоединиться (Фаза 3b).
+function LateJoinPanel({ cargo, onJoined }: { cargo: CargoRequest; onJoined: () => void }) {
+  const matches = useAsync(
+    () => (cargo.status === "open" ? getMatchingConsolidations(cargo.id) : Promise.resolve([])),
+    [cargo.id, cargo.status]
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function join(consId: string) {
+    setError(null);
+    try {
+      setBusy(true);
+      await joinConsolidation(consId, cargo.id);
+      matches.reload();
+      onJoined();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (matches.isLoading || !matches.data || matches.data.length === 0) return null;
+
+  return (
+    <section className="detail-panel" style={{ marginTop: 16 }}>
+      <h3 className="panel__title">{t("lateJoin.title")}</h3>
+      {error && <div className="form-error">{error}</div>}
+      <ul className="landing-search__list">
+        {matches.data.map((c) => (
+          <li className="public-card" key={c.id}>
+            <div className="public-card__route">
+              <MultilingualRoute origin={c.origin} destination={c.destination} />
+            </div>
+            <div className="public-card__meta">{t("lateJoin.consolidatedCargo")}: {c.total_volume_m3} {t("fleet.unitM3")} · {c.total_weight_kg} {t("fleet.unitKg")}</div>
+            <button className="btn btn--primary btn--sm" type="button" disabled={busy} onClick={() => void join(c.id)}>
+              {t("lateJoin.join")}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

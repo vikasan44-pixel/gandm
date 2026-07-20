@@ -1,5 +1,5 @@
 import { api } from "./client";
-import type { GeoPoint } from "./types";
+import type { CargoCategory, GeoPoint } from "./types";
 
 // Гостевой (без авторизации) поиск. Точки — координатами из геокодера, поиск
 // по радиусу haversine (как везде на платформе). Гость видит анонимные
@@ -9,8 +9,11 @@ export interface PublicCargoCard {
   id: string;
   origin_label: string;
   origin_country: string;
+  origin_labels?: Record<string, string>;
   destination_label: string;
   destination_country: string;
+  destination_labels?: Record<string, string>;
+  category: CargoCategory;
   volume_m3: number;
   weight_kg: number;
   created_at: string;
@@ -33,6 +36,21 @@ export interface PublicVehicleCard {
   location_label?: string;
   location_labels?: Record<string, string>;
   destinations: PublicPoint[];
+  trust_percent: number;
+  documents_verified: boolean;
+  has_completed_trips: boolean;
+  masked_plate?: string;
+  active_trip?: {
+    id: string;
+    origin: PublicPoint;
+    destination: PublicPoint;
+    waypoints: PublicPoint[];
+    can_pickup_en_route: boolean;
+    pickup_radius_km: number;
+    departure_date: string;
+    free_weight_kg: number;
+    free_volume_m3: number;
+  };
   created_at: string;
 }
 
@@ -66,7 +84,8 @@ export function searchPublicCargo(from: GeoPoint | null, to: GeoPoint | null) {
 export function searchPublicTransport(
   filter: TransportSearchFilter,
   from: GeoPoint | null,
-  to: GeoPoint | null
+  to: GeoPoint | null,
+  isAuthenticated = false
 ) {
   const params = new URLSearchParams();
   if (filter.body_type) params.set("body_type", filter.body_type);
@@ -78,5 +97,6 @@ export function searchPublicTransport(
   if (filter.min_axles) params.set("min_axles", String(filter.min_axles));
   appendPoint(params, "from", from);
   appendPoint(params, "to", to);
-  return api.get<PublicVehicleCard[]>(`/public/transport?${params.toString()}`);
+  const endpoint = isAuthenticated ? "/transport/search" : "/public/transport";
+  return api.get<PublicVehicleCard[]>(`${endpoint}?${params.toString()}`);
 }

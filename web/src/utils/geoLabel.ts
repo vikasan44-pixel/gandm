@@ -1,15 +1,17 @@
 import { getLocale } from "../i18n";
+import { cityNameFromLabel } from "./locationLabel";
 
-// pickLabel выбирает подпись точки на языке интерфейса. Fallback: текущий
-// язык → английский → русский → китайский → исходная подпись. Так адрес
-// читается носителем любого языка, а если перевода нет — показываем как есть.
+// pickLabel выбирает локализованную подпись, а для карточек и списков оставляет
+// только город/населённый пункт. Полный адрес продолжает храниться в GeoPoint
+// и показывается только внутри поля выбора адреса и карты.
 export function pickLabel(
   labels: Record<string, string> | undefined | null,
   fallback: string
 ): string {
+  let selected = fallback;
   if (labels) {
     const loc = getLocale();
-    return labels[loc] || labels.en || labels.ru || labels.zh || fallback;
+    selected = labels[loc] || labels.en || labels.ru || labels.zh || fallback;
   }
-  return fallback;
+  return cityNameFromLabel(selected);
 }

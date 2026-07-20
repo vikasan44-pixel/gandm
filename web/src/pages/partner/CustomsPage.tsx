@@ -7,7 +7,12 @@ import { EmptyState } from "../../components/common/EmptyState";
 import { ApiError } from "../../api/client";
 import { t } from "../../i18n";
 import { formatDateTime } from "../../utils/date";
+import { DEFAULT_CURRENCY } from "../../utils/currency";
 import type { CustomsCompetition } from "../../api/types";
+import { MultilingualCargoCategory } from "../../components/common/MultilingualLabels";
+import { CurrencySelect } from "../../components/common/CurrencySelect";
+import { Money } from "../../components/common/Money";
+import { compactDirectionLabel } from "../../utils/locationLabel";
 
 // CustomsPage — открытые конкурсы на таможенное оформление (ТЗ §10.2).
 // Представитель видит направление и наименования грузов — никаких личных
@@ -49,8 +54,9 @@ function CompetitionRow({
   competition: CustomsCompetition;
   onChanged: () => void;
 }) {
-  const [price, setPrice] = useState("");
-  const [conditions, setConditions] = useState("");
+  const [price, setPrice] = useState(competition.my_offer ? String(competition.my_offer.price) : "");
+  const [currency, setCurrency] = useState<string>(competition.my_offer?.currency || DEFAULT_CURRENCY);
+  const [conditions, setConditions] = useState(competition.my_offer?.conditions ?? "");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -64,7 +70,7 @@ function CompetitionRow({
     }
     setIsSubmitting(true);
     try {
-      await createCustomsOffer(competition.consolidated_request_id, priceNum, conditions);
+      await createCustomsOffer(competition.consolidated_request_id, priceNum, currency, conditions);
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
@@ -76,20 +82,26 @@ function CompetitionRow({
   return (
     <li className="tool-row" style={{ alignItems: "flex-start" }}>
       <div style={{ flex: 1 }}>
-        <div className="tool-row__name">{competition.direction_label}</div>
+        <div className="tool-row__name">{compactDirectionLabel(competition.direction_label)}</div>
         <div className="tool-row__key">
           {t("customs.totals")}: {competition.total_volume_m3} м³ ·{" "}
           {competition.total_weight_kg.toLocaleString("ru-RU")} кг ·{" "}
           {formatDateTime(competition.created_at)}
         </div>
         <div className="tool-row__key">
-          {t("customs.cargoNames")}: {competition.cargo_names.join(", ") || "—"}
+          {t("customs.cargoNames")}:
+          {(competition.cargo_items ?? []).map((item, index) => (
+            <span key={`${item.category}-${index}`} style={{ display: "block", marginTop: 4 }}>
+              <MultilingualCargoCategory category={item.category} />
+              {item.description ? ` — ${t("cargo.originalDescription")}: ${item.description}` : ""}
+            </span>
+          ))}
+          {(!competition.cargo_items || competition.cargo_items.length === 0) && (competition.cargo_names.join(", ") || "—")}
         </div>
 
-        {competition.my_offer ? (
+        {competition.my_offer && competition.my_offer.status !== "withdrawn" ? (
           <p className="panel__hint">
-            {t("customs.myOffer")}: {competition.my_offer.price.toLocaleString("ru-RU")}{" "}
-            {competition.my_offer.currency}
+            {t("customs.myOffer")}: <Money amount={competition.my_offer.price} currency={competition.my_offer.currency} />
             {competition.my_offer.conditions && ` — ${competition.my_offer.conditions}`}
           </p>
         ) : (
@@ -103,6 +115,7 @@ function CompetitionRow({
               placeholder={t("customs.offerPrice")}
               required
             />
+            <CurrencySelect value={currency} onChange={setCurrency} ariaLabel={t("common.currency")} />
             <input
               value={conditions}
               onChange={(e) => setConditions(e.target.value)}
