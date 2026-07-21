@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"gandm/internal/auth"
 	"gandm/internal/models"
 	"gandm/internal/repository"
 )
@@ -122,7 +123,13 @@ func (s *CargoService) SetEmployeeBlocked(ctx context.Context, companyID, employ
 		return nil, err
 	}
 
-	empRepo := repository.NewEmployeeRepository(s.db)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	empRepo := repository.NewEmployeeRepository(tx)
 	status := models.UserStatusActive
 	if blocked {
 		status = models.UserStatusBlocked
@@ -130,5 +137,20 @@ func (s *CargoService) SetEmployeeBlocked(ctx context.Context, companyID, employ
 	if err := empRepo.SetStatus(ctx, companyID, employeeID, status); err != nil {
 		return nil, err
 	}
-	return empRepo.GetForCompany(ctx, companyID, employeeID)
+	if blocked {
+		if err := repository.NewRefreshTokenRepository(tx).RevokeAllForSubject(ctx, auth.SubjectUser, employeeID, time.Now()); err != nil {
+			return nil, err
+		}
+		if err := repository.NewActiveSessionRepository(tx).DeleteForSubject(ctx, auth.SubjectUser, employeeID); err != nil {
+			return nil, err
+		}
+	}
+	employee, err := empRepo.GetForCompany(ctx, companyID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return employee, nil
 }

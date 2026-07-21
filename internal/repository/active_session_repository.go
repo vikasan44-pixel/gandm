@@ -73,3 +73,11 @@ func (r *ActiveSessionRepository) DeleteIfMatches(ctx context.Context, subjectTy
 	_, err := r.db.Exec(ctx, q, subjectType, subjectID, sessionID)
 	return err
 }
+
+// DeleteForSubject immediately invalidates whichever access-token session is
+// active for the account. Administrative blocking uses this stronger variant;
+// a later explicit login may create a new limited session to display status.
+func (r *ActiveSessionRepository) DeleteForSubject(ctx context.Context, subjectType string, subjectID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM active_sessions WHERE subject_type = $1 AND subject_id = $2`, subjectType, subjectID)
+	return err
+}
