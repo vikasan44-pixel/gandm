@@ -290,7 +290,9 @@ func (h *CargoHandler) UploadMyVehicleDocument(w http.ResponseWriter, r *http.Re
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing auth context")
 		return
 	}
-	if err := r.ParseMultipartForm(12 << 20); err != nil {
+	const maxVehicleDocumentUploadSize = 12 << 20
+	r.Body = http.MaxBytesReader(w, r.Body, maxVehicleDocumentUploadSize)
+	if err := r.ParseMultipartForm(maxVehicleDocumentUploadSize); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_body", "invalid multipart form")
 		return
 	}
