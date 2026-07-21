@@ -305,7 +305,7 @@ fi
 step "16. Заявка видна клиенту в /cargo/mine"
 if [ -n "$TOKEN_A" ] && [ -n "$CARGO_ID" ]; then
   STATUS=$(req GET /cargo/mine "" "$TOKEN_A")
-  if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.[] | select(.id == $id)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+	if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.items[] | select(.id == $id)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
     pass "GET /cargo/mine содержит поданную заявку"
   else
     fail "GET /cargo/mine (HTTP $STATUS) не содержит заявку $CARGO_ID"
@@ -354,7 +354,7 @@ if [ -n "$USER_ID_B" ] && [ -n "$ADMIN_TOKEN" ] && [ -n "$TOOL_ID_RECEIVE" ] && 
   assert_status "Назначение receive_cargo_by_route" "200" "$STATUS"
 
   STATUS=$(req GET /cargo/available "" "$TOKEN_B")
-  if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.[] | select(.id == $id)] | length == 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+	if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.items[] | select(.id == $id)] | length == 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
     pass "С инструментом, но без маршрута — заявка не видна"
   else
     fail "С инструментом без маршрута заявка видна или ошибка (HTTP $STATUS) — ожидали 200 и пустое совпадение"
@@ -387,7 +387,7 @@ if [ -n "$USER_ID_B" ] && [ -n "$ADMIN_TOKEN" ] && [ -n "$TOOL_ID_RECEIVE" ] && 
   fi
 
   STATUS=$(req GET /cargo/available "" "$TOKEN_B")
-  if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.[] | select(.id == $id)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+	if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.items[] | select(.id == $id)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
     pass "С инструментом и точкой в пределах радиуса заявка видна"
   else
     fail "GET /cargo/available (HTTP $STATUS) не содержит заявку $CARGO_ID после добавления маршрута в 20 км"
@@ -526,7 +526,7 @@ if [ -n "$USER_ID_C" ] && [ -n "$ADMIN_TOKEN" ] && [ -n "$TOOL_ID_RECEIVE" ]; th
   fi
 
   STATUS=$(req GET /cargo/available "" "$TOKEN_C")
-  if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.[] | select(.id == $id)] | length == 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+	if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.items[] | select(.id == $id)] | length == 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
     pass "KZ-точка в 50 км (вне радиуса 40) — заявку НЕ видит"
   else
     fail "GET /cargo/available (HTTP $STATUS): участник с точкой в 50 км видит заявку или ошибка"
@@ -669,7 +669,7 @@ if [ -n "$USER_ID_D" ] && [ -n "$ADMIN_TOKEN" ] && [ -n "$TOOL_ID_RECEIVE" ] && 
       return
     fi
     local found
-    found=$(jq -e --arg id "$cargo_id" '[.[] | select(.id == $id)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1 && echo yes || echo no)
+	found=$(jq -e --arg id "$cargo_id" '[.items[] | select(.id == $id)] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1 && echo yes || echo no)
     if [ "$found" = "$expect_visible" ]; then
       pass "$desc"
     else
@@ -737,7 +737,7 @@ if [ -n "$TOKEN_A" ] && [ -n "$CARGO_ID" ] && [ -n "$OFFER_ID_1" ]; then
   fi
 
   STATUS=$(req GET /cargo/mine "" "$TOKEN_A")
-  if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.[] | select(.id == $id and .status == "matched")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+	if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_ID" '[.items[] | select(.id == $id and .status == "matched")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
     pass "Заявка после select в статусе matched"
   else
     fail "Заявка $CARGO_ID не перешла в matched (HTTP $STATUS)"
@@ -966,7 +966,7 @@ if [ -n "$SID_1" ] && [ "$SID_1" != "none" ]; then
   fi
 
   STATUS=$(req GET /cargo/mine "" "$TOKEN_A")
-  if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_S1" '[.[] | select(.id == $id and .status == "closed")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+	if [ "$STATUS" = "200" ] && jq -e --arg id "$CARGO_S1" '[.items[] | select(.id == $id and .status == "closed")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
     pass "Заявка S1 закрыта (ушла в объединённую)"
   else
     fail "Заявка S1 не перешла в closed"
@@ -1000,7 +1000,7 @@ if [ -n "$TOKEN_A" ] && [ -n "$TOKEN_E" ]; then
     fi
 
     STATUS=$(req GET /cargo/mine "" "$TOKEN_A")
-    if jq -e --arg id "$CARGO_T1" '[.[] | select(.id == $id and .status == "open")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
+	if jq -e --arg id "$CARGO_T1" '[.items[] | select(.id == $id and .status == "open")] | length > 0' "$TMP_DIR/resp.json" >/dev/null 2>&1; then
       pass "T1 осталась открытой — едет своим конкурсом"
     else
       fail "T1 не в статусе open после отказа"
