@@ -324,7 +324,7 @@ func (s *RegistrationService) UploadDocument(ctx context.Context, userID uuid.UU
 
 	docRepo := repository.NewDocumentRepository(s.db)
 	if err := docRepo.Create(ctx, doc); err != nil {
-		return nil, err
+		return nil, cleanupUploadedObject(ctx, s.storage, key, err)
 	}
 
 	return doc, nil

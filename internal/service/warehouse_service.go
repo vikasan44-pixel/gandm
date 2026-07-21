@@ -97,6 +97,9 @@ func (s *WarehouseService) CreateFillReport(ctx context.Context, userID uuid.UUI
 		report.PhotoURL = &key
 	}
 	if err := repository.NewFillReportRepository(s.db).Create(ctx, report); err != nil {
+		if report.PhotoURL != nil {
+			return nil, cleanupUploadedObject(ctx, s.storage, *report.PhotoURL, err)
+		}
 		return nil, err
 	}
 	view := s.withPhotoURL(ctx, *report)

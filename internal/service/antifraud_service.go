@@ -70,6 +70,9 @@ func (s *AntifraudService) AddFavorite(ctx context.Context, clientID, participan
 }
 
 func (s *AntifraudService) RemoveFavorite(ctx context.Context, clientID, participantID uuid.UUID) error {
+	if err := s.requireEligible(ctx, clientID); err != nil {
+		return err
+	}
 	return repository.NewAntifraudRepository(s.db).RemoveFavorite(ctx, clientID, participantID)
 }
 
@@ -168,7 +171,7 @@ func (s *AntifraudService) UploadDealDocument(ctx context.Context, userID, dealI
 		UploadedAt:   time.Now(),
 	}
 	if err := repository.NewAntifraudRepository(s.db).CreateDealDocument(ctx, doc); err != nil {
-		return nil, err
+		return nil, cleanupUploadedObject(ctx, s.storage, key, err)
 	}
 
 	view := &DealDocumentView{DealDocument: *doc}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -64,6 +65,11 @@ func (s *CargoService) UploadMyVehicleDocument(ctx context.Context, userID, vehi
 	if !allowedVehicleDocumentTypes[docType] {
 		return nil, fmt.Errorf("%w: unknown vehicle document type", ErrInvalidInput)
 	}
+	documentRepo := repository.NewVehicleDocumentRepository(s.db)
+	previous, err := documentRepo.GetByVehicleAndType(ctx, vehicleID, docType)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
 	if header.Size > maxDocumentSize {
 		return nil, ErrFileTooLarge
 	}
@@ -92,11 +98,22 @@ func (s *CargoService) UploadMyVehicleDocument(ctx context.Context, userID, vehi
 		ID: uuid.New(), VehicleID: vehicleID, Type: docType, FileURL: key,
 		OriginalName: header.Filename, ContentType: contentType, UploadedAt: time.Now(),
 	}
-	if err := repository.NewVehicleDocumentRepository(s.db).Upsert(ctx, document); err != nil {
-		return nil, err
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, cleanupUploadedObject(ctx, s.storage, key, err)
 	}
-	if err := vehicleRepo.RefreshVerificationStatus(ctx, vehicleID); err != nil {
-		return nil, err
+	defer tx.Rollback(ctx)
+	if err := repository.NewVehicleDocumentRepository(tx).Upsert(ctx, document); err != nil {
+		return nil, cleanupUploadedObject(ctx, s.storage, key, err)
+	}
+	if err := repository.NewVehicleRepository(tx).RefreshVerificationStatus(ctx, vehicleID); err != nil {
+		return nil, cleanupUploadedObject(ctx, s.storage, key, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, cleanupUploadedObject(ctx, s.storage, key, err)
+	}
+	if previous != nil && previous.FileURL != key {
+		_ = deleteStoredObject(ctx, s.storage, previous.FileURL)
 	}
 	return vehicleRepo.GetByID(ctx, vehicleID)
 }

@@ -40,6 +40,12 @@ func (r *VehicleDocumentRepository) Upsert(ctx context.Context, document *models
 	return err
 }
 
+func (r *VehicleDocumentRepository) GetByVehicleAndType(ctx context.Context, vehicleID uuid.UUID, documentType models.VehicleDocumentType) (*models.VehicleDocument, error) {
+	return scanVehicleDocument(r.db.QueryRow(ctx, `
+		SELECT id, vehicle_id, type, file_url, original_name, content_type, uploaded_at
+		FROM vehicle_documents WHERE vehicle_id=$1 AND type=$2`, vehicleID, documentType))
+}
+
 func scanVehicleDocument(row pgx.Row) (*models.VehicleDocument, error) {
 	var document models.VehicleDocument
 	err := row.Scan(&document.ID, &document.VehicleID, &document.Type, &document.FileURL,

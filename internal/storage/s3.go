@@ -14,6 +14,11 @@ type S3Client struct {
 	bucket string
 }
 
+type ObjectInfo struct {
+	Key          string
+	LastModified time.Time
+}
+
 func NewS3Client(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*S3Client, error) {
 	client, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
@@ -42,6 +47,21 @@ func (s *S3Client) Upload(ctx context.Context, key string, r io.Reader, size int
 		ContentType: contentType,
 	})
 	return err
+}
+
+func (s *S3Client) Delete(ctx context.Context, key string) error {
+	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
+}
+
+func (s *S3Client) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	objects := make([]ObjectInfo, 0)
+	for object := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if object.Err != nil {
+			return nil, object.Err
+		}
+		objects = append(objects, ObjectInfo{Key: object.Key, LastModified: object.LastModified})
+	}
+	return objects, nil
 }
 
 // PresignedGetURL returns a short-lived URL for viewing a private document

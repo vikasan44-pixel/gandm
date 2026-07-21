@@ -374,6 +374,35 @@ func main() {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Storage hygiene: uploads are compensated immediately on DB failure, and
+	// this daily sweep removes any older orphan left by a process crash between
+	// the object upload and transaction commit. Fresh objects get a 24h guard.
+	go func() {
+		collect := func() {
+			gcCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			removed, err := service.CollectOrphanedStorageObjects(gcCtx, dbPool, s3Client, 24*time.Hour)
+			if err != nil {
+				log.Printf("storage garbage collection: %v", err)
+				return
+			}
+			if removed > 0 {
+				log.Printf("storage garbage collection removed %d orphaned objects", removed)
+			}
+		}
+		collect()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				collect()
+			}
+		}
+	}()
+
 	// Background sweep: resolve consolidation suggestions whose response window
 	// (3h) has elapsed, so a group forms even if some members never answered.
 	go func() {
