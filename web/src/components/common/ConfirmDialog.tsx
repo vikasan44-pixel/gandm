@@ -17,6 +17,7 @@ const ConfirmContext = createContext<ConfirmFunction | null>(null);
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<PendingConfirmation | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+	const dialogRef = useRef<HTMLElement>(null);
 
   const confirm = useCallback<ConfirmFunction>((options) => new Promise((resolve) => {
     const normalized = typeof options === "string" ? { message: options } : options;
@@ -34,17 +35,32 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!pending) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") settle(false);
-    };
+	if (!pending) return;
+	const previousOverflow = document.body.style.overflow;
+	const previousFocus = document.activeElement as HTMLElement | null;
+	document.body.style.overflow = "hidden";
+	const handleKeyDown = (event: KeyboardEvent) => {
+	  if (event.key === "Escape") settle(false);
+	  if (event.key === "Tab") {
+		const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+		if (!focusable?.length) return;
+		const first = focusable[0];
+		const last = focusable[focusable.length - 1];
+		if (event.shiftKey && document.activeElement === first) {
+		  event.preventDefault();
+		  last.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+		  event.preventDefault();
+		  first.focus();
+		}
+	  }
+	};
     window.addEventListener("keydown", handleKeyDown);
     requestAnimationFrame(() => cancelButtonRef.current?.focus());
     return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
+	  document.body.style.overflow = previousOverflow;
+	  window.removeEventListener("keydown", handleKeyDown);
+	  previousFocus?.focus();
     };
   }, [pending, settle]);
 
@@ -55,7 +71,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         <div className="confirm-modal" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) settle(false);
         }}>
-          <section className="confirm-modal__dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
+		<section ref={dialogRef} className="confirm-modal__dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
             <div className={`confirm-modal__icon${pending.danger === false ? " confirm-modal__icon--neutral" : ""}`} aria-hidden="true">!</div>
             <div className="confirm-modal__copy">
               <h2 id="confirm-dialog-title">{pending.title ?? t("common.confirmTitle")}</h2>

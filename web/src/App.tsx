@@ -4,6 +4,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { HomeRedirect, RequireAdmin, RequireMember } from "./components/RequireAuth";
 import { AdminShell, MemberShell } from "./components/layout/AppShell";
 import { ConfirmProvider } from "./components/common/ConfirmDialog";
+import { AppErrorBoundary } from "./components/common/AppErrorBoundary";
 import { RatesProvider } from "./money/RatesContext";
 
 const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
@@ -39,6 +40,7 @@ const WarehousesPage = lazy(() => import("./pages/partner/WarehousesPage").then(
 
 export default function App() {
   return (
+	<AppErrorBoundary>
     <AuthProvider>
       <RatesProvider>
       <ConfirmProvider>
@@ -97,5 +99,6 @@ export default function App() {
       </ConfirmProvider>
       </RatesProvider>
     </AuthProvider>
+	</AppErrorBoundary>
   );
 }

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
@@ -28,6 +28,7 @@ export function Sidebar({ brand, nav }: { brand: string; nav: NavGroup[] }) {
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null);
   const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+	const dropdownRef = useRef<HTMLDivElement>(null);
 
   // A selected destination closes the floating menu; the active category is
   // still highlighted in the bar, but never occupies page height.
@@ -66,6 +67,30 @@ export function Sidebar({ brand, nav }: { brand: string; nav: NavGroup[] }) {
   }, [openGroup]);
 
   const openedGroup = visibleGroups.find((group) => group.label === openGroup);
+
+	useEffect(() => {
+	  if (!openGroup || !menuPosition) return;
+	  requestAnimationFrame(() => dropdownRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus());
+	}, [openGroup, menuPosition]);
+
+	function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+	  const items = Array.from(dropdownRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+	  if (items.length === 0) return;
+	  const current = Math.max(0, items.indexOf(document.activeElement as HTMLElement));
+	  let next: number | null = null;
+	  if (event.key === "ArrowDown") next = (current + 1) % items.length;
+	  if (event.key === "ArrowUp") next = (current - 1 + items.length) % items.length;
+	  if (event.key === "Home") next = 0;
+	  if (event.key === "End") next = items.length - 1;
+	  if (event.key === "Tab") {
+		setOpenGroup(null);
+		setMenuPosition(null);
+	  }
+	  if (next !== null) {
+		event.preventDefault();
+		items[next].focus();
+	  }
+	}
 
   function toggleGroup(group: NavGroup, button: HTMLButtonElement) {
     if (openGroup === group.label) {
@@ -106,11 +131,13 @@ export function Sidebar({ brand, nav }: { brand: string; nav: NavGroup[] }) {
         })}
       </nav>
       {openedGroup && menuPosition && createPortal(
-        <div
+		<div
+		  ref={dropdownRef}
           className="sidebar__dropdown"
           id="sidebar-floating-menu"
           role="menu"
-          data-nav-dropdown
+		  data-nav-dropdown
+		  onKeyDown={handleMenuKeyDown}
           style={{
             "--dropdown-left": `${menuPosition.left}px`,
             "--dropdown-top": `${menuPosition.top}px`,
@@ -122,7 +149,7 @@ export function Sidebar({ brand, nav }: { brand: string; nav: NavGroup[] }) {
             return (
               <Fragment key={`${openedGroup.label}-${item.to}`}>
                 {item.section && item.section !== previousSection && (
-                  <div className="sidebar__dropdown-section">{item.section}</div>
+			  <div className="sidebar__dropdown-section" role="presentation">{item.section}</div>
                 )}
                 <NavLink
                   to={item.to}

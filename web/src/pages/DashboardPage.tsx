@@ -11,6 +11,7 @@ import {
 import { LoadingState } from "../components/common/LoadingState";
 import { ErrorState } from "../components/common/ErrorState";
 import { EmptyState } from "../components/common/EmptyState";
+import { DetailModal } from "../components/common/DetailModal";
 import { ApiError } from "../api/client";
 import { formatDateTime } from "../utils/date";
 import { t } from "../i18n";
@@ -27,6 +28,9 @@ export function DashboardPage() {
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [processingId, setProcessingId] = useState<string | null>(null);
+	const [rejectingId, setRejectingId] = useState<string | null>(null);
+	const [rejectReason, setRejectReason] = useState("");
+	const [rejectError, setRejectError] = useState<string | null>(null);
 
   const topUrgent = useMemo(() => (pendingQueue.data ?? []).slice(0, 3), [pendingQueue.data]);
 
@@ -44,17 +48,24 @@ export function DashboardPage() {
     }
   }
 
-  async function handleReject(id: string) {
-    const reason = window.prompt(t("verification.rejectPrompt"));
-    if (!reason || !reason.trim()) return;
-    setActionError(null);
-    setProcessingId(id);
-    try {
-      await rejectVerification(id, reason.trim());
-      pendingQueue.reload();
-      auditFeed.reload();
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
+	async function handleReject() {
+	  if (!rejectingId) return;
+	  const reason = rejectReason.trim();
+	  if (!reason) {
+		setRejectError(t("verification.reasonRequired"));
+		return;
+	  }
+	  setActionError(null);
+	  setRejectError(null);
+	  setProcessingId(rejectingId);
+	  try {
+		await rejectVerification(rejectingId, reason);
+		pendingQueue.reload();
+		auditFeed.reload();
+		setRejectingId(null);
+		setRejectReason("");
+	  } catch (err) {
+		setRejectError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
     } finally {
       setProcessingId(null);
     }
@@ -115,7 +126,11 @@ export function DashboardPage() {
                   <button
                     className="btn btn--secondary btn--sm"
                     disabled={processingId === item.verification_id}
-                    onClick={() => handleReject(item.verification_id)}
+					onClick={() => {
+					  setRejectingId(item.verification_id);
+					  setRejectReason("");
+					  setRejectError(null);
+					}}
                   >
                     {t("verification.reject")}
                   </button>
@@ -152,7 +167,22 @@ export function DashboardPage() {
             ))}
           </ul>
         )}
-      </section>
-    </div>
+	  </section>
+
+	  {rejectingId && (
+		<DetailModal onClose={() => setRejectingId(null)}>
+		  <h2 className="panel__title">{t("verification.reject")}</h2>
+		  <label className="field">
+			<span className="field__label">{t("verification.rejectPrompt")}</span>
+			<textarea value={rejectReason} placeholder={t("verification.reasonPlaceholder")} onChange={(event) => setRejectReason(event.target.value)} />
+		  </label>
+		  {rejectError && <div className="form-error">{rejectError}</div>}
+		  <div className="modal-actions">
+			<button className="btn btn--secondary" type="button" onClick={() => setRejectingId(null)}>{t("common.cancel")}</button>
+			<button className="btn btn--danger" type="button" disabled={processingId === rejectingId} onClick={() => void handleReject()}>{t("verification.confirmReject")}</button>
+		  </div>
+		</DetailModal>
+	  )}
+	</div>
   );
 }

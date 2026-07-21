@@ -50,18 +50,22 @@ function NotificationMenu({ unread }: { unread: number }) {
   const [isOpen, setIsOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    if (!isOpen) return;
-    setIsLoading(true);
-    getNotifications()
+	if (!isOpen) return;
+	setIsLoading(true);
+	setError(null);
+	getNotifications()
       .then(async (data) => {
         setItems(data);
         await markNotificationsRead();
-        await refreshUnreadCount();
-      })
-      .finally(() => setIsLoading(false));
-  }, [isOpen]);
+		await refreshUnreadCount();
+	  })
+	  .catch(() => setError(t("common.unexpectedError")))
+	  .finally(() => setIsLoading(false));
+	}, [isOpen, reloadKey]);
 
   return (
     <div className="app-notifications">
@@ -78,8 +82,13 @@ function NotificationMenu({ unread }: { unread: number }) {
             <strong>{t("notifications.title")}</strong>
             <button type="button" aria-label={t("common.close")} onClick={() => setIsOpen(false)}>×</button>
           </div>
-          {isLoading && <p className="panel__hint">{t("common.loading")}</p>}
-          {!isLoading && items.length === 0 && <p className="panel__hint">{t("notifications.empty")}</p>}
+		  {isLoading && <p className="panel__hint">{t("common.loading")}</p>}
+		  {!isLoading && error && (
+			<div className="form-error">
+			  {error} <button className="btn btn--ghost btn--sm" type="button" onClick={() => setReloadKey((value) => value + 1)}>{t("common.retry")}</button>
+			</div>
+		  )}
+		  {!isLoading && !error && items.length === 0 && <p className="panel__hint">{t("notifications.empty")}</p>}
           {!isLoading && (["cargo", "transport", "warehouse", "customs"] as NotificationCategory[]).map((category) => {
             const categoryItems = items.filter((item) => notificationCategory(item.type) === category);
             return (
@@ -204,7 +213,7 @@ export function MemberShell() {
           label: t("cabinetMenu.myFleet"),
           section: t("cabinetMenu.transportSection"),
         }] : []),
-        ...(has("receive_cargo_by_route")
+		...(has("receive_cargo_by_route", "manage_fleet", "manage_warehouse_slots")
           ? [{
               to: "/app/routes",
               label: t("cabinetMenu.myTransportRoutes"),
