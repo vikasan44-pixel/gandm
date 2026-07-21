@@ -12,6 +12,29 @@ import (
 
 var ErrRouteExists = repository.ErrRouteExists
 
+// Routes are shared infrastructure for carrier matching, fleet driver
+// competitions and warehouse dispatch planning. Keep this capability rule in
+// the service layer so direct API calls and the UI enforce the same policy.
+var routeToolKeys = []string{
+	ToolReceiveCargoByRoute,
+	ToolManageFleet,
+	ToolManageWarehouseSlots,
+}
+
+func (s *CargoService) requireRouteTool(ctx context.Context, userID uuid.UUID) error {
+	toolRepo := repository.NewToolRepository(s.db)
+	for _, key := range routeToolKeys {
+		has, err := toolRepo.UserHasTool(ctx, userID, key)
+		if err != nil {
+			return err
+		}
+		if has {
+			return nil
+		}
+	}
+	return ErrForbiddenTool
+}
+
 // requireActiveUser gates the self-service routes endpoints: the brief says
 // "Доступно active-участнику" — stricter than the pending/active rule used
 // for cargo submission and document upload. Admins can still manage routes
@@ -44,12 +67,18 @@ func (s *CargoService) ListMyRoutes(ctx context.Context, userID uuid.UUID) ([]mo
 	if err := s.requireActiveUser(ctx, userID); err != nil {
 		return nil, err
 	}
+	if err := s.requireRouteTool(ctx, userID); err != nil {
+		return nil, err
+	}
 	routeRepo := repository.NewParticipantRouteRepository(s.db)
 	return routeRepo.ListByUserID(ctx, userID)
 }
 
 func (s *CargoService) AddMyRoute(ctx context.Context, userID uuid.UUID, origin, destination models.GeoPoint) (*models.ParticipantRoute, error) {
 	if err := s.requireActiveUser(ctx, userID); err != nil {
+		return nil, err
+	}
+	if err := s.requireRouteTool(ctx, userID); err != nil {
 		return nil, err
 	}
 	origin, destination, err := validateRoutePoints(origin, destination)
@@ -77,6 +106,9 @@ func (s *CargoService) AddMyRoute(ctx context.Context, userID uuid.UUID, origin,
 // endpoint doesn't confirm that a guessed route id exists.
 func (s *CargoService) DeleteMyRoute(ctx context.Context, userID, routeID uuid.UUID) error {
 	if err := s.requireActiveUser(ctx, userID); err != nil {
+		return err
+	}
+	if err := s.requireRouteTool(ctx, userID); err != nil {
 		return err
 	}
 
