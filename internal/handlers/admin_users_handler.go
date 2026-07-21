@@ -15,11 +15,16 @@ import (
 
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	pageRequest, err := pageRequestFromQuery(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
 	users, err := h.svc.ListUsers(r.Context(), service.UserListFilter{
 		ParticipantType: q.Get("type"),
 		Status:          q.Get("status"),
 		Search:          q.Get("search"),
-	})
+	}, pageRequest)
 	if err != nil {
 		writeAdminServiceError(w, err)
 		return

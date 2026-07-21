@@ -18,6 +18,7 @@ import {
 import { LoadingState } from "../components/common/LoadingState";
 import { ErrorState } from "../components/common/ErrorState";
 import { EmptyState } from "../components/common/EmptyState";
+import { Pagination } from "../components/common/Pagination";
 import { DetailModal } from "../components/common/DetailModal";
 import { useConfirm } from "../components/common/ConfirmDialog";
 import { UserStatusPill } from "../components/common/StatusPill";
@@ -43,13 +44,15 @@ export function UsersPage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [page, setPage] = useState(1);
 
   useEffect(() => {
     const timer = setTimeout(() => setSearch(searchInput), 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  const users = useAsync(() => getUsers({ type, status, search }), [type, status, search]);
+	useEffect(() => setPage(1), [type, status, search]);
+	const users = useAsync(() => getUsers({ type, status, search, page, page_size: 20 }), [type, status, search, page]);
 
   return (
     <div className="page">
@@ -82,8 +85,8 @@ export function UsersPage() {
 
         {users.isLoading && <LoadingState />}
         {users.error && <ErrorState message={users.error} onRetry={users.reload} />}
-        {users.data && users.data.length === 0 && <EmptyState message={t("users.empty")} />}
-        {users.data && users.data.length > 0 && (
+		{users.data && users.data.items.length === 0 && <EmptyState message={t("users.empty")} />}
+		{users.data && users.data.items.length > 0 && (
           <div className="table-scroll">
             <table className="table">
               <thead>
@@ -96,7 +99,7 @@ export function UsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {users.data.map((u) => (
+				{users.data.items.map((u) => (
                   <tr
                     key={u.id}
                     className={
@@ -116,7 +119,8 @@ export function UsersPage() {
               </tbody>
             </table>
           </div>
-        )}
+		)}
+		{users.data && <Pagination page={page} pageSize={users.data.page_size} totalItems={users.data.total} onPageChange={setPage} />}
       </div>
       {selectedId && (
         <DetailModal onClose={() => setSelectedId(null)} wide>

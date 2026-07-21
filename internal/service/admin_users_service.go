@@ -38,7 +38,8 @@ type CompanyRef struct {
 	Email       string    `json:"email"`
 }
 
-func (s *AdminService) ListUsers(ctx context.Context, f UserListFilter) ([]models.User, error) {
+func (s *AdminService) ListUsers(ctx context.Context, f UserListFilter, pageRequest PageRequest) (Page[models.User], error) {
+	pageRequest = pageRequest.Normalize()
 	filter := repository.UserFilter{Search: strings.TrimSpace(f.Search)}
 
 	if f.ParticipantType != "" {
@@ -47,13 +48,17 @@ func (s *AdminService) ListUsers(ctx context.Context, f UserListFilter) ([]model
 	if f.Status != "" {
 		st := models.UserStatus(f.Status)
 		if !allowedUserStatuses[st] {
-			return nil, fmt.Errorf("%w: unknown status", ErrInvalidInput)
+			return Page[models.User]{}, fmt.Errorf("%w: unknown status", ErrInvalidInput)
 		}
 		filter.Status = &st
 	}
 
 	userRepo := repository.NewUserRepository(s.db)
-	return userRepo.List(ctx, filter)
+	users, total, err := userRepo.ListPage(ctx, filter, pageRequest.PageSize, pageRequest.Offset())
+	if err != nil {
+		return Page[models.User]{}, err
+	}
+	return NewPage(users, total, pageRequest), nil
 }
 
 func (s *AdminService) GetUser(ctx context.Context, userID uuid.UUID) (*UserDetail, error) {
@@ -266,6 +271,9 @@ func (s *AdminService) setUserStatus(ctx context.Context, adminID, userID uuid.U
 	if status == models.UserStatusBlocked {
 		rtRepo := repository.NewRefreshTokenRepository(tx)
 		if err := rtRepo.RevokeAllForSubject(ctx, auth.SubjectUser, userID, time.Now()); err != nil {
+			return err
+		}
+		if err := repository.NewActiveSessionRepository(tx).DeleteForSubject(ctx, auth.SubjectUser, userID); err != nil {
 			return err
 		}
 	}

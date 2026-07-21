@@ -770,3 +770,9 @@ export interface TransportProposalView extends TransportProposal {
   counterpart?: { company_name: string; email: string; phone: string };
   counterpart_id?: string;
 }
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}

@@ -163,25 +163,26 @@ func publicWarehouseCard(w models.Warehouse) PublicWarehouseCard {
 // SearchWarehouses returns published warehouses within radiusKm of the point,
 // nearest first, without contacts. Any eligible user can search; no tool is
 // required (this is the searcher side, not the warehouse-owner side).
-func (s *CargoService) SearchWarehouses(ctx context.Context, userID uuid.UUID, lat, lng, radiusKm float64) ([]PublicWarehouseCard, error) {
+func (s *CargoService) SearchWarehouses(ctx context.Context, userID uuid.UUID, lat, lng, radiusKm float64, pageRequest PageRequest) (Page[PublicWarehouseCard], error) {
 	if _, err := s.requireEligibleUser(ctx, userID); err != nil {
-		return nil, err
+		return Page[PublicWarehouseCard]{}, err
 	}
 	if !geo.ValidLatLng(lat, lng) {
-		return nil, fmt.Errorf("%w: coordinates out of WGS-84 range", ErrInvalidInput)
+		return Page[PublicWarehouseCard]{}, fmt.Errorf("%w: coordinates out of WGS-84 range", ErrInvalidInput)
 	}
 	if radiusKm <= 0 || radiusKm > 3000 {
-		return nil, fmt.Errorf("%w: radius_km must be between 0 and 3000", ErrInvalidInput)
+		return Page[PublicWarehouseCard]{}, fmt.Errorf("%w: radius_km must be between 0 and 3000", ErrInvalidInput)
 	}
-	list, err := repository.NewWarehouseRepository(s.db).SearchPublishedNear(ctx, lat, lng, radiusKm)
+	pageRequest = pageRequest.Normalize()
+	list, total, err := repository.NewWarehouseRepository(s.db).SearchPublishedNearPage(ctx, lat, lng, radiusKm, pageRequest.PageSize, pageRequest.Offset())
 	if err != nil {
-		return nil, err
+		return Page[PublicWarehouseCard]{}, err
 	}
 	cards := make([]PublicWarehouseCard, 0, len(list))
 	for _, w := range list {
 		cards = append(cards, publicWarehouseCard(w))
 	}
-	return cards, nil
+	return NewPage(cards, total, pageRequest), nil
 }
 
 func (s *CargoService) ListMyWarehouses(ctx context.Context, userID uuid.UUID) ([]models.Warehouse, error) {

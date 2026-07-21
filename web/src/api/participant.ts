@@ -30,6 +30,7 @@ import type {
   MeResponse,
   NotificationItem,
   ParticipantRoute,
+  PaginatedResponse,
   Rating,
   SelectOfferResult,
   Tool,
@@ -90,13 +91,15 @@ export function joinConsolidation(consolidatedId: string, cargoId: string) {
   return api.post<ConsolidatedRequest>(`/consolidated/${consolidatedId}/join`, { cargo_request_id: cargoId });
 }
 
-export function searchWarehouses(point: GeoPoint, radiusKm: number) {
+export function searchWarehouses(point: GeoPoint, radiusKm: number, page = 1) {
   const p = new URLSearchParams({
     lat: String(point.lat),
     lng: String(point.lng),
-    radius_km: String(radiusKm),
-  });
-  return api.get<PublicWarehouseCard[]>(`/warehouses/search?${p.toString()}`);
+		radius_km: String(radiusKm),
+		page: String(page),
+		page_size: "12",
+	});
+	return api.get<PaginatedResponse<PublicWarehouseCard>>(`/warehouses/search?${p.toString()}`);
 }
 
 export function loginUser(email: string, password: string) {
@@ -176,8 +179,8 @@ export function cancelCargo(id: string) {
   return api.del<{ status: string }>(`/cargo/${id}`);
 }
 
-export function getMyCargo() {
-  return api.get<CargoRequest[]>("/cargo/mine");
+export function getMyCargo(page = 1, pageSize = 12) {
+	return api.get<PaginatedResponse<CargoRequest>>(`/cargo/mine?page=${page}&page_size=${pageSize}`);
 }
 
 export interface CargoCompetitionResponse {
@@ -205,8 +208,10 @@ export function getMyCargoCompetitionResponses() {
   return api.get<CargoCompetitionResponse[]>("/offers/mine");
 }
 
-export function getAvailableCargo(from: GeoPoint | null = null, to: GeoPoint | null = null) {
-  const params = new URLSearchParams();
+export function getAvailableCargo(from: GeoPoint | null = null, to: GeoPoint | null = null, page = 1) {
+	const params = new URLSearchParams();
+	params.set("page", String(page));
+	params.set("page_size", "12");
   if (from) {
     params.set("from_lat", String(from.lat));
     params.set("from_lng", String(from.lng));
@@ -220,7 +225,7 @@ export function getAvailableCargo(from: GeoPoint | null = null, to: GeoPoint | n
     params.set("to_label", to.label ?? "");
   }
   const query = params.toString();
-  return api.get<CargoRequest[]>(`/cargo/available${query ? `?${query}` : ""}`);
+	return api.get<PaginatedResponse<CargoRequest>>(`/cargo/available${query ? `?${query}` : ""}`);
 }
 
 export function getCargoOffers(cargoId: string) {

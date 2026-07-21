@@ -7,6 +7,7 @@ import type {
   GeoPoint,
   ParticipantRoute,
   ParticipantType,
+  PaginatedResponse,
   PlatformSettings,
   PermissionSet,
   Tool,
@@ -87,15 +88,19 @@ export interface UserListParams {
   type?: ParticipantType | "";
   status?: UserStatus | "";
   search?: string;
+	page?: number;
+	page_size?: number;
 }
 
 export function getUsers(params: UserListParams = {}) {
   const query = new URLSearchParams();
   if (params.type) query.set("type", params.type);
   if (params.status) query.set("status", params.status);
-  if (params.search) query.set("search", params.search);
+	if (params.search) query.set("search", params.search);
+	if (params.page) query.set("page", String(params.page));
+	if (params.page_size) query.set("page_size", String(params.page_size));
   const qs = query.toString();
-  return api.get<User[]>(`/admin/users${qs ? `?${qs}` : ""}`);
+	return api.get<PaginatedResponse<User>>(`/admin/users${qs ? `?${qs}` : ""}`);
 }
 
 export function getUserDetail(id: string) {

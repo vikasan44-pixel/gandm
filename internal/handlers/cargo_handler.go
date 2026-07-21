@@ -151,7 +151,12 @@ func (h *CargoHandler) ListMyCargoRequests(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	items, err := h.svc.ListMyCargoRequests(r.Context(), userID)
+	pageRequest, err := pageRequestFromQuery(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+	items, err := h.svc.ListMyCargoRequests(r.Context(), userID, pageRequest)
 	if err != nil {
 		writeCargoServiceError(w, err)
 		return
@@ -176,11 +181,17 @@ func (h *CargoHandler) ListAvailableCargoRequests(w http.ResponseWriter, r *http
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_input", err.Error())
 		return
 	}
+	pageRequest, err := pageRequestFromQuery(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
 	items, err := h.svc.ListAvailableCargoRequests(
 		r.Context(),
 		userID,
 		from,
 		to,
+		pageRequest,
 	)
 	if err != nil {
 		writeCargoServiceError(w, err)
@@ -368,6 +379,8 @@ func writeCargoServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusConflict, "already_bid", "you already bid on this competition")
 	case errors.Is(err, service.ErrCompetitionClosed):
 		httpx.WriteError(w, http.StatusConflict, "competition_closed", "this competition is already closed")
+	case errors.Is(err, repository.ErrOpenCompetitionExists):
+		httpx.WriteError(w, http.StatusConflict, "competition_exists", "an open competition already exists for this route")
 	case errors.Is(err, service.ErrNoVehicles):
 		httpx.WriteError(w, http.StatusConflict, "no_vehicles", "add at least one vehicle to bid")
 	case errors.Is(err, service.ErrEmployeeOfEmployee):

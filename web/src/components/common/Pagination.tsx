@@ -69,7 +69,7 @@ export function Pagination({
 
 type CompactPage = number | "ellipsis";
 
-function compactPages(currentPage: number, totalPages: number): CompactPage[] {
+export function compactPages(currentPage: number, totalPages: number): CompactPage[] {
   const visible = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
   const pageNumbers = [...visible]
     .filter((page) => page >= 1 && page <= totalPages)

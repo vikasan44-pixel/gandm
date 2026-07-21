@@ -66,24 +66,35 @@ func (r *WarehouseRepository) ListByUserID(ctx context.Context, userID uuid.UUID
 // radiusKm of the given point, nearest first. address is JSONB, so lat/lng are
 // extracted for the haversine distance.
 func (r *WarehouseRepository) SearchPublishedNear(ctx context.Context, lat, lng, radiusKm float64) ([]models.Warehouse, error) {
+	items, _, err := r.SearchPublishedNearPage(ctx, lat, lng, radiusKm, 1000, 0)
+	return items, err
+}
+
+func (r *WarehouseRepository) SearchPublishedNearPage(ctx context.Context, lat, lng, radiusKm float64, limit, offset int) ([]models.Warehouse, int, error) {
+	const where = ` WHERE status = 'published'
+		AND haversine_km($1::float8, $2::float8, (address->>'lat')::float8, (address->>'lng')::float8) <= $3::float8`
+	var total int
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM warehouses`+where, lat, lng, radiusKm).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	const q = `SELECT ` + warehouseColumns + ` FROM warehouses
-		WHERE status = 'published'
-		  AND haversine_km($1::float8, $2::float8, (address->>'lat')::float8, (address->>'lng')::float8) <= $3::float8
-		ORDER BY haversine_km($1::float8, $2::float8, (address->>'lat')::float8, (address->>'lng')::float8) ASC`
-	rows, err := r.db.Query(ctx, q, lat, lng, radiusKm)
+		` + where + `
+		ORDER BY haversine_km($1::float8, $2::float8, (address->>'lat')::float8, (address->>'lng')::float8) ASC
+		LIMIT $4 OFFSET $5`
+	rows, err := r.db.Query(ctx, q, lat, lng, radiusKm, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	items := make([]models.Warehouse, 0)
 	for rows.Next() {
 		w, err := scanWarehouse(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		items = append(items, *w)
 	}
-	return items, rows.Err()
+	return items, total, rows.Err()
 }
 
 // ListPublishedOwnersMatching returns distinct owner ids of published,

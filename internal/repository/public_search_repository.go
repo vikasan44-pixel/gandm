@@ -44,8 +44,13 @@ func appendRadiusFilter(q *strings.Builder, args *[]any, p *models.GeoPoint, lat
 // только «куда» — по destination, обе — по обеим. Возвращает не более 200
 // свежих записей. Анонимизацию (срез client_id/description) делает сервис.
 func (r *CargoRequestRepository) SearchOpenPublicCargo(ctx context.Context, from, to *models.GeoPoint, excludeClientID *uuid.UUID, cnKm, kzKm float64) ([]models.CargoRequest, error) {
+	items, _, err := r.SearchOpenPublicCargoPage(ctx, from, to, excludeClientID, cnKm, kzKm, 200, 0)
+	return items, err
+}
+
+func publicCargoSearchWhere(from, to *models.GeoPoint, excludeClientID *uuid.UUID, cnKm, kzKm float64) (string, []any) {
 	var q strings.Builder
-	q.WriteString(`SELECT ` + cargoRequestColumns + ` FROM cargo_requests cr WHERE cr.status = 'open'`)
+	q.WriteString(` WHERE cr.status = 'open'`)
 	args := []any{}
 	if excludeClientID != nil {
 		args = append(args, *excludeClientID)
@@ -57,8 +62,20 @@ func (r *CargoRequestRepository) SearchOpenPublicCargo(ctx context.Context, from
 	if to != nil {
 		appendRadiusFilter(&q, &args, to, "cr.destination_lat", "cr.destination_lng", "cr.destination_country", cnKm, kzKm)
 	}
-	q.WriteString(` ORDER BY cr.created_at DESC LIMIT 200`)
-	return queryCargoRequests(ctx, r.db, q.String(), args...)
+	return q.String(), args
+}
+
+func (r *CargoRequestRepository) SearchOpenPublicCargoPage(ctx context.Context, from, to *models.GeoPoint, excludeClientID *uuid.UUID, cnKm, kzKm float64, limit, offset int) ([]models.CargoRequest, int, error) {
+	where, args := publicCargoSearchWhere(from, to, excludeClientID, cnKm, kzKm)
+	var total int
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM cargo_requests cr`+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, limit, offset)
+	query := `SELECT ` + cargoRequestColumns + ` FROM cargo_requests cr` + where +
+		fmt.Sprintf(` ORDER BY cr.created_at DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
+	items, err := queryCargoRequests(ctx, r.db, query, args...)
+	return items, total, err
 }
 
 // VehicleSearchFilter — параметры гостевого поиска транспорта: характеристики

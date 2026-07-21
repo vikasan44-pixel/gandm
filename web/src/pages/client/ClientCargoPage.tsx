@@ -33,6 +33,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { LoadingState } from "../../components/common/LoadingState";
 import { ErrorState } from "../../components/common/ErrorState";
 import { EmptyState } from "../../components/common/EmptyState";
+import { Pagination, SEARCH_PAGE_SIZE } from "../../components/common/Pagination";
 import { DetailModal } from "../../components/common/DetailModal";
 import { useConfirm } from "../../components/common/ConfirmDialog";
 import { MultilingualCargoCategory, MultilingualRoute } from "../../components/common/MultilingualLabels";
@@ -56,7 +57,8 @@ import type {
 } from "../../api/types";
 
 export function ClientCargoPage() {
-  const cargo = useAsync(getMyCargo, []);
+	const [page, setPage] = useState(1);
+	const cargo = useAsync(() => getMyCargo(page), [page]);
   const consolidated = useAsync(getMyConsolidated, []);
   const [selected, setSelected] = useState<CargoRequest | null>(null);
   const [selectedCons, setSelectedCons] = useState<ConsolidatedRequest | null>(null);
@@ -115,12 +117,12 @@ export function ClientCargoPage() {
 
         {cargo.isLoading && <LoadingState />}
         {cargo.error && <ErrorState message={cargo.error} onRetry={cargo.reload} />}
-        {cargo.data && cargo.data.length === 0 && (
+		{cargo.data && cargo.data.items.length === 0 && (
           <EmptyState message={t("cargo.listEmpty")} />
         )}
-        {cargo.data && cargo.data.length > 0 && (
+		{cargo.data && cargo.data.items.length > 0 && (
           <ul className="queue-list">
-            {cargo.data.map((item) => (
+			{cargo.data.items.map((item) => (
               <li
                 key={item.id}
                 className={
@@ -144,7 +146,8 @@ export function ClientCargoPage() {
               </li>
             ))}
           </ul>
-        )}
+		)}
+		{cargo.data && <Pagination page={page} pageSize={SEARCH_PAGE_SIZE} totalItems={cargo.data.total} onPageChange={setPage} />}
       </div>
 
       {isCreating && (

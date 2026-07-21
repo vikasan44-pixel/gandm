@@ -47,8 +47,8 @@ export function SendProposalModal({
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    getMyCargo()
-      .then((list) => setMyCargo(list.filter((c) => c.status === "open")))
+	getMyCargo(1, 100)
+	  .then((response) => setMyCargo(response.items.filter((c) => c.status === "open")))
       .catch(() => setMyCargo([]));
   }, []);
 

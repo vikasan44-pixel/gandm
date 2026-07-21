@@ -141,11 +141,16 @@ type UserFilter struct {
 }
 
 func (r *UserRepository) List(ctx context.Context, f UserFilter) ([]models.User, error) {
+	users, _, err := r.ListPage(ctx, f, 1000, 0)
+	return users, err
+}
+
+func (r *UserRepository) ListPage(ctx context.Context, f UserFilter, limit, offset int) ([]models.User, int, error) {
 	query := `
 		SELECT ` + userColumns + `
 		FROM users WHERE 1=1
 	`
-	args := make([]any, 0, 3)
+	args := make([]any, 0, 5)
 	if f.ServiceType != "" {
 		args = append(args, f.ServiceType)
 		n := len(args)
@@ -165,11 +170,17 @@ func (r *UserRepository) List(ctx context.Context, f UserFilter) ([]models.User,
 		n := len(args)
 		query += fmt.Sprintf(" AND (email ILIKE $%d OR company_name ILIKE $%d OR phone ILIKE $%d)", n, n, n)
 	}
-	query += " ORDER BY created_at DESC"
+	countQuery := strings.Replace(query, "SELECT "+userColumns, "SELECT COUNT(*)", 1)
+	var total int
+	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, limit, offset)
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -177,11 +188,11 @@ func (r *UserRepository) List(ctx context.Context, f UserFilter) ([]models.User,
 	for rows.Next() {
 		var u models.User
 		if err := rows.Scan(&u.ID, &u.Email, &u.Phone, &u.CompanyName, &u.LegalForm, &u.ParticipantType, &u.PasswordHash, &u.Status, &u.HasSubscription, &u.Language, &u.CreatedAt, &u.LastActiveAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		users = append(users, u)
 	}
-	return users, rows.Err()
+	return users, total, rows.Err()
 }
 
 func (r *UserRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status models.UserStatus) error {

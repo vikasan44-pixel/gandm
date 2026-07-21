@@ -8,21 +8,18 @@ import { searchWarehouses } from "../../api/participant";
 import { ApiError } from "../../api/client";
 import { pickLabel } from "../../utils/geoLabel";
 import { t } from "../../i18n";
-import type { GeoPoint, PublicWarehouseCard } from "../../api/types";
+import type { GeoPoint, PaginatedResponse, PublicWarehouseCard } from "../../api/types";
 
 export function WarehouseSearchPage() {
   const [point, setPoint] = useState<GeoPoint | null>(null);
   const [radius, setRadius] = useState("100");
-  const [results, setResults] = useState<PublicWarehouseCard[] | null>(null);
+	const [results, setResults] = useState<PaginatedResponse<PublicWarehouseCard> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [upsell, setUpsell] = useState(false);
   const [page, setPage] = useState(1);
 
-  const pageStart = (page - 1) * SEARCH_PAGE_SIZE;
-  const pagedResults = (results ?? []).slice(pageStart, pageStart + SEARCH_PAGE_SIZE);
-
-  async function search() {
+	async function search(requestedPage = 1) {
     setError(null);
     if (!point) {
       setError(t("warehouseSearch.pointRequired"));
@@ -34,9 +31,10 @@ export function WarehouseSearchPage() {
       return;
     }
     setLoading(true);
-    setPage(1);
-    try {
-      setResults(await searchWarehouses(point, r));
+		try {
+			const response = await searchWarehouses(point, r, requestedPage);
+			setResults(response);
+			setPage(response.page);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t("warehouseSearch.searchFailed"));
     } finally {
@@ -60,7 +58,7 @@ export function WarehouseSearchPage() {
             <span className="field__label">{t("warehouseSearch.radius")}</span>
             <input className="field__input" type="number" value={radius} onChange={(e) => setRadius(e.target.value)} />
           </label>
-          <button className="btn btn--primary warehouse-search__submit" type="button" onClick={() => void search()} disabled={loading}>
+		<button className="btn btn--primary warehouse-search__submit" type="button" onClick={() => void search(1)} disabled={loading}>
             {loading ? t("warehouseSearch.searching") : t("warehouseSearch.search")}
           </button>
         </div>
@@ -68,19 +66,19 @@ export function WarehouseSearchPage() {
       </section>
 
       {loading && <LoadingState />}
-      {results && results.length === 0 && !loading && (
+	  {results && results.items.length === 0 && !loading && (
         <EmptyState message={t("warehouseSearch.empty")} />
       )}
 
-      {results && results.length > 0 && (
+	  {results && results.items.length > 0 && (
         <section className="landing-search__results">
-          <div className="landing-search__count">{t("warehouseSearch.found")}: {results.length}</div>
+		  <div className="landing-search__count">{t("warehouseSearch.found")}: {results.total}</div>
           <ul className="landing-search__list">
-            {pagedResults.map((wh) => (
+			{results.items.map((wh) => (
               <WarehouseCard key={wh.id} wh={wh} onWantContacts={() => setUpsell(true)} />
             ))}
           </ul>
-          <Pagination page={page} totalItems={results.length} onPageChange={setPage} />
+		  <Pagination page={page} pageSize={SEARCH_PAGE_SIZE} totalItems={results.total} onPageChange={(next) => void search(next)} />
         </section>
       )}
 

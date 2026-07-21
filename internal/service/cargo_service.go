@@ -379,28 +379,38 @@ func (s *CargoService) notifyMatchingParticipants(ctx context.Context, cargo *mo
 	return nil
 }
 
-func (s *CargoService) ListMyCargoRequests(ctx context.Context, clientID uuid.UUID) ([]models.CargoRequest, error) {
+func (s *CargoService) ListMyCargoRequests(ctx context.Context, clientID uuid.UUID, pageRequest PageRequest) (Page[models.CargoRequest], error) {
 	if _, err := s.requireEligibleUser(ctx, clientID); err != nil {
-		return nil, err
+		return Page[models.CargoRequest]{}, err
 	}
+	pageRequest = pageRequest.Normalize()
 	cargoRepo := repository.NewCargoRequestRepository(s.db)
-	return cargoRepo.ListByClientID(ctx, clientID)
+	items, total, err := cargoRepo.ListByClientIDPage(ctx, clientID, pageRequest.PageSize, pageRequest.Offset())
+	if err != nil {
+		return Page[models.CargoRequest]{}, err
+	}
+	return NewPage(items, total, pageRequest), nil
 }
 
 // ListAvailableCargoRequests enforces both gates from the brief: the
 // receive_cargo_by_route tool AND at least one route within the per-country
 // radius of both cargo endpoints (radius matching happens in SQL). A tooled
 // participant with no routes correctly sees an empty list.
-func (s *CargoService) ListAvailableCargoRequests(ctx context.Context, participantID uuid.UUID, from, to *models.GeoPoint) ([]models.CargoRequest, error) {
+func (s *CargoService) ListAvailableCargoRequests(ctx context.Context, participantID uuid.UUID, from, to *models.GeoPoint, pageRequest PageRequest) (Page[models.CargoRequest], error) {
 	if _, err := s.requireEligibleUser(ctx, participantID); err != nil {
-		return nil, err
+		return Page[models.CargoRequest]{}, err
 	}
 	if err := s.requireTool(ctx, participantID, ToolReceiveCargoByRoute); err != nil {
-		return nil, err
+		return Page[models.CargoRequest]{}, err
 	}
 
+	pageRequest = pageRequest.Normalize()
 	cargoRepo := repository.NewCargoRequestRepository(s.db)
-	return cargoRepo.SearchOpenPublicCargo(ctx, from, to, &participantID, s.cfg.MatchRadiusCNKm, s.cfg.MatchRadiusKZKm)
+	items, total, err := cargoRepo.ListOpenMatchingUserRoutesPage(ctx, participantID, from, to, s.cfg.MatchRadiusCNKm, s.cfg.MatchRadiusKZKm, pageRequest.PageSize, pageRequest.Offset())
+	if err != nil {
+		return Page[models.CargoRequest]{}, err
+	}
+	return NewPage(items, total, pageRequest), nil
 }
 
 type CargoCompetitionResponse struct {

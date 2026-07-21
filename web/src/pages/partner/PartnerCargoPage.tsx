@@ -21,7 +21,7 @@ import { DEFAULT_CURRENCY } from "../../utils/currency";
 import { t } from "../../i18n";
 import type { CreateOfferInput } from "../../api/participant";
 import type { CargoCompetitionResponse } from "../../api/participant";
-import type { CargoRequest, ConsolidatedRequest, GeoPoint } from "../../api/types";
+import type { CargoRequest, ConsolidatedRequest, GeoPoint, PaginatedResponse } from "../../api/types";
 
 // A participant can offer on a single cargo request or on a consolidated
 // one — same form, different endpoint.
@@ -30,28 +30,27 @@ type Selection =
   | { kind: "consolidated"; cons: ConsolidatedRequest };
 
 export function PartnerCargoPage() {
-  const cargo = useAsync(getAvailableCargo, []);
+	const [page, setPage] = useState(1);
+	const cargo = useAsync(() => getAvailableCargo(null, null, page), [page]);
   const consolidated = useAsync(getAvailableConsolidated, []);
   const myOffers = useAsync(getMyCargoCompetitionResponses, []);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [from, setFrom] = useState<GeoPoint | null>(null);
   const [to, setTo] = useState<GeoPoint | null>(null);
-  const [filteredCargo, setFilteredCargo] = useState<CargoRequest[] | null>(null);
+	const [filteredCargo, setFilteredCargo] = useState<PaginatedResponse<CargoRequest> | null>(null);
   const [isFiltering, setIsFiltering] = useState(false);
   const [filterError, setFilterError] = useState<string | null>(null);
   const [isMapVisible, setIsMapVisible] = useState(true);
-  const [page, setPage] = useState(1);
 
-  const visibleCargo = filteredCargo ?? cargo.data;
-  const pageStart = (page - 1) * SEARCH_PAGE_SIZE;
-  const pagedCargo = (visibleCargo ?? []).slice(pageStart, pageStart + SEARCH_PAGE_SIZE);
+	const visibleCargo = filteredCargo ?? cargo.data;
 
-  async function handleDirectionSearch() {
+	async function handleDirectionSearch(requestedPage = 1) {
     setFilterError(null);
     setIsFiltering(true);
-    setPage(1);
-    try {
-      setFilteredCargo(await getAvailableCargo(from, to));
+		try {
+			const response = await getAvailableCargo(from, to, requestedPage);
+			setFilteredCargo(response);
+			setPage(response.page);
       if (from && to) setIsMapVisible(false);
     } catch (err) {
       setFilterError(err instanceof ApiError ? err.message : t("common.unexpectedError"));
@@ -102,7 +101,7 @@ export function PartnerCargoPage() {
               <GeoPointField title={t("landing.search.to")} value={to} onChange={setTo} />
             </div>
           )}
-          <button className="btn btn--primary" type="button" disabled={isFiltering} onClick={() => void handleDirectionSearch()}>
+		  <button className="btn btn--primary" type="button" disabled={isFiltering} onClick={() => void handleDirectionSearch(1)}>
             {isFiltering ? t("common.loading") : t("partner.findCargo")}
           </button>
           {filterError && <div className="form-error">{filterError}</div>}
@@ -144,19 +143,19 @@ export function PartnerCargoPage() {
         {cargo.isLoading && <LoadingState />}
         {cargo.error && <ErrorState message={cargo.error} onRetry={cargo.reload} />}
 
-        {visibleCargo && visibleCargo.length === 0 && (
+		{visibleCargo && visibleCargo.items.length === 0 && (
           <div className="state state--empty">
             <p>{t("partner.availableEmpty")}</p>
           </div>
         )}
 
-        {visibleCargo && visibleCargo.length > 0 && (
+		{visibleCargo && visibleCargo.items.length > 0 && (
           <section className="search-results-section">
             <div className="landing-search__count">
-              {t("landing.search.resultsCargo")}: {visibleCargo.length}
+			  {t("landing.search.resultsCargo")}: {visibleCargo.total}
             </div>
             <ul className="queue-list">
-              {pagedCargo.map((item) => (
+			{visibleCargo.items.map((item) => (
                 <li
                   key={item.id}
                   className={
@@ -179,7 +178,10 @@ export function PartnerCargoPage() {
                 </li>
               ))}
             </ul>
-            <Pagination page={page} totalItems={visibleCargo.length} onPageChange={setPage} />
+			<Pagination page={page} pageSize={SEARCH_PAGE_SIZE} totalItems={visibleCargo.total} onPageChange={(next) => {
+			  if (filteredCargo) void handleDirectionSearch(next);
+			  else setPage(next);
+			}} />
           </section>
         )}
       </div>

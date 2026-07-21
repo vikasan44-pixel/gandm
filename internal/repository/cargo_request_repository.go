@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -182,6 +184,16 @@ func (r *CargoRequestRepository) ListByClientID(ctx context.Context, clientID uu
 	return queryCargoRequests(ctx, r.db, q, clientID)
 }
 
+func (r *CargoRequestRepository) ListByClientIDPage(ctx context.Context, clientID uuid.UUID, limit, offset int) ([]models.CargoRequest, int, error) {
+	var total int
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM cargo_requests WHERE client_id = $1`, clientID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	q := `SELECT ` + cargoRequestColumns + ` FROM cargo_requests WHERE client_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	items, err := queryCargoRequests(ctx, r.db, q, clientID, limit, offset)
+	return items, total, err
+}
+
 // ActiveVolumeByOwnedRoute sums the caller's open/matched cargo requests for
 // every saved direction. This is the platform part of a warehouse dispatch
 // plan's "already collected" volume.
@@ -230,9 +242,13 @@ func (r *CargoRequestRepository) ActiveVolumeByOwnedRoute(ctx context.Context, u
 // generous of their radii. A participant with no routes gets an empty list
 // by construction.
 func (r *CargoRequestRepository) ListOpenMatchingUserRoutes(ctx context.Context, userID uuid.UUID, cnKm, kzKm float64) ([]models.CargoRequest, error) {
-	q := `
-		SELECT ` + cargoRequestColumns + `
-		FROM cargo_requests cr
+	items, _, err := r.ListOpenMatchingUserRoutesPage(ctx, userID, nil, nil, cnKm, kzKm, 1000, 0)
+	return items, err
+}
+
+func (r *CargoRequestRepository) ListOpenMatchingUserRoutesPage(ctx context.Context, userID uuid.UUID, from, to *models.GeoPoint, cnKm, kzKm float64, limit, offset int) ([]models.CargoRequest, int, error) {
+	var where strings.Builder
+	where.WriteString(` FROM cargo_requests cr
 		WHERE cr.status = 'open' AND EXISTS (
 			SELECT 1 FROM participant_routes pr
 			WHERE pr.user_id = $1
@@ -249,10 +265,23 @@ func (r *CargoRequestRepository) ListOpenMatchingUserRoutes(ctx context.Context,
 			      <= GREATEST(
 			           CASE WHEN pr.destination_country = 'cn' THEN $2::float8 ELSE $3::float8 END,
 			           CASE WHEN cr.destination_country = 'cn' THEN $2::float8 ELSE $3::float8 END)
-		)
-		ORDER BY cr.created_at DESC
-	`
-	return queryCargoRequests(ctx, r.db, q, userID, cnKm, kzKm)
+		)`)
+	args := []any{userID, cnKm, kzKm}
+	if from != nil {
+		appendRadiusFilter(&where, &args, from, "cr.origin_lat", "cr.origin_lng", "cr.origin_country", cnKm, kzKm)
+	}
+	if to != nil {
+		appendRadiusFilter(&where, &args, to, "cr.destination_lat", "cr.destination_lng", "cr.destination_country", cnKm, kzKm)
+	}
+	var total int
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*)`+where.String(), args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, limit, offset)
+	query := `SELECT ` + cargoRequestColumns + where.String() +
+		fmt.Sprintf(` ORDER BY cr.created_at DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
+	items, err := queryCargoRequests(ctx, r.db, query, args...)
+	return items, total, err
 }
 
 // ListOpenMatchingOwnerWarehouses returns open cargo requests that at least one

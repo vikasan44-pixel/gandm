@@ -28,7 +28,12 @@ func (h *CargoHandler) SearchWarehouses(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, http.StatusBadRequest, "invalid_query", "lat, lng and radius_km must be numbers")
 		return
 	}
-	cards, err := h.svc.SearchWarehouses(r.Context(), userID, lat, lng, radius)
+	pageRequest, err := pageRequestFromQuery(r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+	cards, err := h.svc.SearchWarehouses(r.Context(), userID, lat, lng, radius, pageRequest)
 	if err != nil {
 		writeCargoServiceError(w, err)
 		return
