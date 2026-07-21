@@ -11,7 +11,12 @@ import (
 	"gandm/internal/models"
 )
 
-var ErrAlreadyBid = errors.New("this driver already bid on this competition")
+var (
+	ErrAlreadyBid            = errors.New("this driver already bid on this competition")
+	ErrOpenCompetitionExists = errors.New("an open competition already exists for this route")
+)
+
+const openCompetitionRouteIndex = "idx_driver_competitions_one_open_per_route"
 
 type DriverCompetitionRepository struct {
 	db Querier
@@ -41,6 +46,12 @@ func (r *DriverCompetitionRepository) Create(ctx context.Context, c *models.Driv
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 	_, err := r.db.Exec(ctx, q, c.ID, c.WarehouseID, c.RouteID, c.VolumeM3, c.DispatchDate, c.Status, c.CreatedAt)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == openCompetitionRouteIndex {
+			return ErrOpenCompetitionExists
+		}
+	}
 	return err
 }
 
@@ -92,7 +103,14 @@ func (r *DriverCompetitionRepository) UpdateOpenOwned(ctx context.Context, id, w
 		SET route_id = $3, volume_m3 = $4, dispatch_date = $5
 		WHERE id = $1 AND warehouse_id = $2 AND status = 'open'
 		RETURNING ` + driverCompetitionColumns
-	return scanDriverCompetition(r.db.QueryRow(ctx, q, id, warehouseID, routeID, volumeM3, dispatchDate))
+	competition, err := scanDriverCompetition(r.db.QueryRow(ctx, q, id, warehouseID, routeID, volumeM3, dispatchDate))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == openCompetitionRouteIndex {
+			return nil, ErrOpenCompetitionExists
+		}
+	}
+	return competition, err
 }
 
 func (r *DriverCompetitionRepository) CancelOpenOwned(ctx context.Context, id, warehouseID uuid.UUID) error {

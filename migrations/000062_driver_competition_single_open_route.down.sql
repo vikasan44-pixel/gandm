@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_driver_competitions_one_open_per_route;

@@ -69,7 +69,13 @@ func (s *CargoService) CreateDriverCompetition(ctx context.Context, warehouseID,
 		return nil, err
 	}
 
-	routeRepo := repository.NewParticipantRouteRepository(s.db)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	routeRepo := repository.NewParticipantRouteRepository(tx)
 	route, err := routeRepo.GetByID(ctx, routeID)
 	if err != nil {
 		return nil, err
@@ -87,12 +93,15 @@ func (s *CargoService) CreateDriverCompetition(ctx context.Context, warehouseID,
 		Status:       models.DriverCompetitionOpen,
 		CreatedAt:    time.Now(),
 	}
-	compRepo := repository.NewDriverCompetitionRepository(s.db)
+	compRepo := repository.NewDriverCompetitionRepository(tx)
 	if err := compRepo.Create(ctx, competition); err != nil {
 		return nil, err
 	}
 
-	if err := s.notifyDriversAboutCompetition(ctx, competition, route); err != nil {
+	if err := s.notifyDriversAboutCompetition(ctx, tx, competition, route); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return competition, nil
@@ -156,8 +165,8 @@ func (s *CargoService) CancelDriverCompetition(ctx context.Context, warehouseID,
 	}
 }
 
-func (s *CargoService) notifyDriversAboutCompetition(ctx context.Context, competition *models.DriverCompetition, route *models.ParticipantRoute) error {
-	toolRepo := repository.NewToolRepository(s.db)
+func (s *CargoService) notifyDriversAboutCompetition(ctx context.Context, q repository.Querier, competition *models.DriverCompetition, route *models.ParticipantRoute) error {
+	toolRepo := repository.NewToolRepository(q)
 	driverIDs, err := toolRepo.ListUserIDsWithToolAndRoute(ctx, ToolManageFleet, route.Origin, route.Destination, s.cfg.MatchRadiusCNKm, s.cfg.MatchRadiusKZKm)
 	if err != nil {
 		return err
@@ -173,7 +182,7 @@ func (s *CargoService) notifyDriversAboutCompetition(ctx context.Context, compet
 		return err
 	}
 
-	notifRepo := repository.NewNotificationRepository(s.db)
+	notifRepo := repository.NewNotificationRepository(q)
 	now := time.Now()
 	for _, driverID := range driverIDs {
 		// Склад не зовёт сам себя возить свой же груз.
@@ -208,7 +217,13 @@ func (s *CargoService) maybeAutoAnnounceDriverCompetition(ctx context.Context, w
 		return nil
 	}
 
-	compRepo := repository.NewDriverCompetitionRepository(s.db)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	compRepo := repository.NewDriverCompetitionRepository(tx)
 	hasOpen, err := compRepo.HasOpenForRoute(ctx, route.ID)
 	if err != nil || hasOpen {
 		return err
@@ -223,10 +238,17 @@ func (s *CargoService) maybeAutoAnnounceDriverCompetition(ctx context.Context, w
 		Status:       models.DriverCompetitionOpen,
 		CreatedAt:    time.Now(),
 	}
-	if err := compRepo.Create(ctx, competition); err != nil {
+	if err := compRepo.Create(ctx, competition); errors.Is(err, repository.ErrOpenCompetitionExists) {
+		// A concurrent threshold update won the race. The unique partial index
+		// makes that winner authoritative, so no second notification is needed.
+		return nil
+	} else if err != nil {
 		return err
 	}
-	return s.notifyDriversAboutCompetition(ctx, competition, route)
+	if err := s.notifyDriversAboutCompetition(ctx, tx, competition, route); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // ListMyDriverCompetitions — склад видит свои конкурсы с анонимными
